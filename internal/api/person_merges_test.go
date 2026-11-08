@@ -125,11 +125,9 @@ func TestPersonMergeHTTPMergeInspectDecideAndSplit(t *testing.T) {
 	assert.NotEmpty(detail.Rows)
 	require.NotEmpty(detail.Labels.Profiles)
 	var detailJSON struct {
-		Participants []json.RawMessage          `json:"participants"`
-		Labels       map[string]json.RawMessage `json:"labels"`
+		Labels map[string]json.RawMessage `json:"labels"`
 	}
 	require.NoError(json.Unmarshal(detailResponse.Body.Bytes(), &detailJSON))
-	assert.Len(detailJSON.Participants, len(detail.Participants))
 	assert.NotContains(detailJSON.Labels, "participants")
 
 	snapshotResponse := personMergeAPIRequest(t, srv, http.MethodGet,

@@ -79,9 +79,9 @@ describe('PersonSplitSteps', () => {
     const late = new Promise<Response>(resolve => { release = resolve; });
     const controller = new PersonMergeHistoryController(createAPIClient(async input => {
       const path = new URL((input as Request).url).pathname;
-      if (path.endsWith('/person-merges/41')) return Response.json({ ...mergeDetail(), labels: { ...mergeDetail().labels, incomplete: false, members: [{ participant_id: 701, email: 'neri@example.org' }, { participant_id: 999, email: 'mira@example.org' }] } });
+      if (path.endsWith('/person-merges/41')) return Response.json({ ...mergeDetail(), labels: { ...mergeDetail().labels, participants: undefined, profiles: [{ id: 7, participant_ids: [] }, { id: 9, participant_ids: [701] }], incomplete: false, members: [{ participant_id: 701, email: 'neri@example.org', normalized_value: 'neri@example.org' }, { participant_id: 999, email: 'mira@example.org', normalized_value: 'mira@example.org' }] } });
       if (path.endsWith('/people/12')) return late;
-      return Response.json({ identifiers: [], participant: { participant_id: 701, display_name: 'Neri Bloom', email: 'neri@example.org' } });
+      throw new Error(`Unexpected request: ${path}`);
     }), 7);
     await controller.selectMerge(41);
     render(PersonSplitSteps, { controller, onOpenPerson: vi.fn() });

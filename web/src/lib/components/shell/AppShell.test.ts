@@ -63,6 +63,7 @@ describe('AppShell', () => {
     try {
       await fireEvent.click(await screen.findByRole('button', { name: 'Add source…' }));
       expect(await screen.findByRole('button', { name: /^Gmail Includes/ })).toBeDefined();
+      expect(state.current.workspace).toBe('sources');
     } finally {
       rendered.unmount();
       state.destroy();

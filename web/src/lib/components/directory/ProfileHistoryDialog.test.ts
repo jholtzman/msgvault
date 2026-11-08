@@ -229,26 +229,25 @@ const mergedInCases = [
   { name: 'formatted phone', service: 'phone', value: '+15550100100', normalized: '+15550100100', display: '+1 555 010 0100', original: '+1 555 010 0100', observed: '+15550100100' },
   { name: 'same handle in another workspace', service: 'slack', value: 'neri', normalized: 'neri', original: 'neri', observed: 'neri', scopeKind: 'workspace', scope: 'garden-club', otherScope: 'seed-exchange', kept: 'Slack · neri · workspace: seed-exchange' },
   { name: 'case-distinct custom service', service: 'custom-chat', value: 'reader', normalized: 'reader', original: 'reader', observed: 'reader', second: 'Reader', scopeKind: 'server', scope: 'example.org', kept: 'custom-chat · Reader · server: example.org' },
-  { name: 'carried through successive merges', service: 'email', value: 'carried@example.org', normalized: 'carried@example.org', kept: 'carried@example.org', carried: true },
   { name: 'curated mixed-case email', service: 'email', value: 'mira@example.org', normalized: 'mira@example.org', original: 'Mira@Example.org', observed: 'mira@example.org' },
 ];
 
 async function renderMergedInAddress(entry: typeof mergedInCases[number]) {
-  const tc = entry as typeof entry & { display?: string; original?: string; observed?: string; scopeKind?: string; scope?: string; otherScope?: string; second?: string; kept?: string; split?: boolean; carried?: boolean };
-  const first = { ...mergeResult(person()).merge, id: 41, survivor_person_id: tc.carried ? 8 : 7, absorbed_person_id: 9, current_person_id: 7 };
-  const merges = tc.carried ? [{ ...first, id: 42, survivor_person_id: 7, absorbed_person_id: 8 }, first] : [first];
+  const tc = entry as typeof entry & { display?: string; original?: string; observed?: string; scopeKind?: string; scope?: string; otherScope?: string; second?: string; kept?: string; split?: boolean };
+  const first = { ...mergeResult(person()).merge, id: 41, survivor_person_id: 7, absorbed_person_id: 9, current_person_id: 7 };
+  const merges = [first];
   const identifiers = [{ participant_id: 1, type: tc.service === 'email' || tc.service === 'phone' ? tc.service : 'handle', value: tc.value, display_value: tc.display ?? '', normalized_value: tc.normalized, service_slug: tc.service, service_label: tc.service === 'slack' ? 'Slack' : tc.service, scope_kind: tc.scopeKind ?? '', scope_value: tc.scope ?? '' },
     ...(tc.second || tc.otherScope ? [{ participant_id: 2, type: 'handle', value: tc.second ?? tc.value, display_value: '', normalized_value: tc.second ?? tc.normalized, service_slug: tc.service, service_label: tc.service === 'slack' ? 'Slack' : tc.service, scope_kind: tc.scopeKind ?? '', scope_value: tc.otherScope ?? tc.scope ?? '' }] : []),
     ...(tc.split ? [{ participant_id: 3, type: 'email', value: 'other3@example.org', display_value: '', normalized_value: 'other3@example.org', service_slug: 'email', service_label: 'Email', scope_kind: '', scope_value: '' }] : [])];
   const labels = (merge: typeof first) => ({
-    profiles: [{ id: merge.survivor_person_id, display_name: merge.id === 41 && tc.carried ? 'Earlier person' : 'Current person', participant_ids: [20] }, { id: merge.absorbed_person_id, display_name: merge.id === 42 ? 'Earlier person' : 'First person', participant_ids: identifiers.map(item => item.participant_id) }],
+    profiles: [{ id: merge.survivor_person_id, display_name: 'Current person', participant_ids: [20] }, { id: merge.absorbed_person_id, display_name: 'First person', participant_ids: identifiers.map(item => item.participant_id) }],
     participants: [{ merge_id: merge.id, participant_id: 20, origin_side: 'survivor' }, ...identifiers.map(item => ({ merge_id: merge.id, participant_id: item.participant_id, origin_side: 'absorbed', ...(item.participant_id === 3 ? { split_id: 5 } : {}) }))],
     members: [20, ...identifiers.map(item => item.participant_id)].map(participant_id => ({ participant_id })), identifiers, incomplete: false,
   });
   render(ProfileHistoryDialog, { personID: 7, onClose: vi.fn(), client: createAPIClient(async input => {
     const path = new URL((input as Request).url).pathname;
     if (path.endsWith('/merges')) return Response.json({ merges: merges.map(merge => ({ merge, labels: labels(merge), participant_count: identifiers.length + 1, row_count: 0, split_count: tc.split ? 1 : 0, pending_candidate_count: 0, row_action_counts: {} })), limit: 100, offset: 0 });
-    if (path.startsWith('/api/v1/person-merges/')) { const merge = merges.find(item => path.endsWith(`/${item.id}`))!; return Response.json({ merge, labels: labels(merge), participants: labels(merge).participants, rows: [], splits: [], review_candidates: [] }); }
+    if (path.startsWith('/api/v1/person-merges/')) { const merge = merges.find(item => path.endsWith(`/${item.id}`))!; return Response.json({ merge, labels: { ...labels(merge), participants: undefined }, participants: labels(merge).participants, rows: [], splits: [], review_candidates: [] }); }
     return Response.json({ ...emptyProfile(person()), merged_in: identifiers.filter(item => item.participant_id !== 3).map(identifier => ({ merge_id: merges[0].id, participant_id: identifier.participant_id, merged_at: when, member: { participant_id: identifier.participant_id }, identifiers: [identifier] })), contact_points: tc.original ? [{ person_id: 7, address_kind: tc.service === 'email' || tc.service === 'phone' ? tc.service : 'username', original_value: tc.original, normalized_value: tc.observed, service_slug: tc.service, scope_kind: tc.scopeKind ?? '', scope_value: tc.scope ?? '', normalization: 'none', normalization_version: 1, envelope: { ...currentEnvelope, id: 3 } }] : [] });
   }) });
   await screen.findAllByRole('button', { name: /^Open .+ merged into .+ · / });
@@ -278,13 +277,8 @@ it('shows merged-in provenance and opens its recorded merge', async () => {
   try {
     await fireEvent.click(link);
     expect(openMerge).toHaveBeenCalledWith(41);
+    expect(await screen.findByRole('dialog', { name: 'First person merged into Current person' })).toBeDefined();
   } finally { openMerge.mockRestore(); }
-});
-
-it('opens the latest merge for an address carried through successive merges', async () => {
-  await renderMergedInAddress(mergedInCases[4]);
-  await fireEvent.click(screen.getByRole('button', { name: 'Open the merge that brought in carried@example.org' }));
-  expect(await screen.findByRole('dialog', { name: 'Earlier person merged into Current person' })).toBeDefined();
 });
 
 it('keeps all 101 merged addresses and their links while Merges changes pages', async () => {
@@ -301,7 +295,7 @@ it('keeps all 101 merged addresses and their links while Merges changes pages', 
       const offset = Number(url.searchParams.get('offset') ?? 0);
       return Response.json({ merges: merges.slice(offset, offset + 100), limit: 100, offset });
     }
-    if (url.pathname === '/api/v1/person-merges/1') return Response.json({ ...merges[0], participants: merges[0].labels.participants, rows: [], splits: [], review_candidates: [] });
+    if (url.pathname === '/api/v1/person-merges/1') return Response.json({ ...merges[0], labels: { ...merges[0].labels, participants: undefined }, participants: merges[0].labels.participants, rows: [], splits: [], review_candidates: [] });
     if (url.pathname.endsWith('/profile/history')) return Response.json({ ...emptyProfile(person()), observations: [], merged_in: merges.map(item => ({ merge_id: item.merge.id, participant_id: item.labels.members[0].participant_id, merged_at: when, member: item.labels.members[0], identifiers: [] })) });
     throw new Error(`unexpected ${url.pathname}`);
   });

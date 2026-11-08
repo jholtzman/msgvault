@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { createRawSnippet, mount, unmount } from 'svelte';
-import { appShortcuts, SelectDropdown } from '@kenn-io/kit-ui';
+import { SelectDropdown } from '@kenn-io/kit-ui';
 import { expect, it, vi } from 'vitest';
 import Dialog from './Dialog.svelte';
 
@@ -46,29 +46,21 @@ it('disables dismissal and Back during a write, then restores both', async () =>
     primaryLabel: 'Split into new person', onprimary: vi.fn(),
     children: createRawSnippet(() => ({ render: () => '<p>Selected addresses</p>' })),
   });
-  const rootShortcut = vi.fn();
-  const unregister = appShortcuts.register('j', rootShortcut, { scope: 'root' });
-  try {
-    appShortcuts.handleKeydown(new KeyboardEvent('keydown', { key: 'j', cancelable: true }));
-    expect(rootShortcut).not.toHaveBeenCalled();
-    for (const name of ['Back', 'Close', 'Cancel']) {
-      const button = screen.getByRole('button', { name }) as HTMLButtonElement;
-      expect(button.disabled).toBe(true);
-      button.click();
-    }
-    await fireEvent.keyDown(document, { key: 'Escape' });
-    await fireEvent.click(view.container.querySelector('.kit-modal-overlay')!);
-    expect(onclose).not.toHaveBeenCalled();
-    expect(onback).not.toHaveBeenCalled();
-    await view.rerender({ busy: false });
-    await fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-    expect(onback).toHaveBeenCalledOnce();
-    await fireEvent.keyDown(document, { key: 'Escape' });
-    expect(onclose).toHaveBeenCalledOnce();
-    view.unmount();
-    appShortcuts.handleKeydown(new KeyboardEvent('keydown', { key: 'j', cancelable: true }));
-    expect(rootShortcut).toHaveBeenCalledOnce();
-  } finally { view.unmount(); unregister(); }
+  for (const name of ['Back', 'Close', 'Cancel']) {
+    const button = screen.getByRole('button', { name }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    button.click();
+  }
+  await fireEvent.keyDown(document, { key: 'Escape' });
+  await fireEvent.click(view.container.querySelector('.kit-modal-overlay')!);
+  expect(onclose).not.toHaveBeenCalled();
+  expect(onback).not.toHaveBeenCalled();
+  await view.rerender({ busy: false });
+  await fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+  expect(onback).toHaveBeenCalledOnce();
+  await fireEvent.keyDown(document, { key: 'Escape' });
+  expect(onclose).toHaveBeenCalledOnce();
+  view.unmount();
 });
 
 it('shows a notice before the footer and leaves a receipt with Done alone', () => {

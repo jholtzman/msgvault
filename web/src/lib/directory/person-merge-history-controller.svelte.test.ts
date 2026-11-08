@@ -24,7 +24,7 @@ function detail(
     merge: { ...mergeResult(person(7)).merge, current_person_id: 12, ...overrides },
     labels: {
       profiles: [{ id: 7, display_name: 'Recorded Name', participant_ids: [702] }, { id: 9, display_name: 'Absorbed', participant_ids: [701] }],
-      participants, members: participants.map(({ participant_id }) => ({ participant_id, email: `address${participant_id}@example.org`, normalized_value: `address${participant_id}@example.org` })), identifiers: [], incomplete: false,
+      members: participants.map(({ participant_id }) => ({ participant_id, email: `address${participant_id}@example.org`, normalized_value: `address${participant_id}@example.org` })), identifiers: [], incomplete: false,
     },
     participants,
     rows: [],
@@ -37,7 +37,7 @@ function summary(id: number) {
   const mergeDetail = detail({ id });
   return {
     merge: mergeDetail.merge,
-    labels: { profiles: [], participants: [], members: [], identifiers: [], incomplete: false },
+    labels: { ...mergeDetail.labels, participants: mergeDetail.participants.map(participant => ({ ...participant, merge_id: id })) },
     participant_count: 1,
     pending_candidate_count: 0,
     row_action_counts: { restored: 2 },
@@ -84,7 +84,6 @@ describe('PersonMergeHistoryController', () => {
     const requests: Request[] = [];
     const fetchFn = vi.fn<typeof fetch>(async (input) => {
       const request = requestOf(input);
-      if (!new URL(request.url).pathname.endsWith('/merges')) return Response.json({}, { status: 503 });
       requests.push(request);
       const offset = Number(new URL(request.url).searchParams.get('offset'));
       const merges =
@@ -113,7 +112,7 @@ describe('PersonMergeHistoryController', () => {
       return Response.json({ merges: Array.from({ length: 100 }, (_, index) => ({ ...summary(index + 1), labels: {
         profiles: [{ id: 7, display_name: 'Recorded survivor', participant_ids: [702] }, { id: 9, display_name: 'Recorded absorbed', participant_ids: [701] }],
         participants: [{ merge_id: index + 1, participant_id: 701, origin_side: 'absorbed' }, { merge_id: index + 1, participant_id: 702, origin_side: 'survivor' }],
-        members: [{ participant_id: 701, email: 'earlier@example.org' }, { participant_id: 702 }], identifiers: [], incomplete: false,
+        members: [{ participant_id: 701, email: 'earlier@example.org', normalized_value: 'earlier@example.org' }, { participant_id: 702 }], identifiers: [], incomplete: false,
       } })), limit: 100, offset: 0 });
     }), 12);
     await controller.loadHistory();
@@ -155,13 +154,14 @@ describe('PersonMergeHistoryController', () => {
       const path = new URL(request.url).pathname;
       if (path === '/api/v1/person-merges/41') return Response.json({ ...detail(), splits: [splitResult().split] });
       if (path === '/api/v1/people/19') return late.promise;
-      if (path === '/api/v1/person-merges/42') return Response.json({ ...detail({ id: 42, survivor_person_id: 8 }, []), labels: { ...detail().labels, participants: [], profiles: [{ id: 8, display_name: 'New Example', participant_ids: [] }] } });
+      if (path === '/api/v1/person-merges/42') return Response.json({ ...detail({ id: 42, survivor_person_id: 8 }, []), labels: { ...detail().labels, profiles: [{ id: 8, display_name: 'New Example', participant_ids: [] }] } });
       throw new Error(`Unexpected request: ${path}`);
     }), 7);
     const first = controller.selectMerge(41);
     await vi.waitFor(() => expect(controller.detail?.merge.id).toBe(41));
     expect(controller.labels).toBeNull();
     expect(controller.detailLoading).toBe(false);
+    expect(controller.canOfferSplit).toBe(true);
     if (replacement === 'person') controller.setPerson(8);
     else await controller.selectMerge(42);
     late.resolve(Response.json(person(19, 1, [], 'Late Example')));
@@ -173,22 +173,6 @@ describe('PersonMergeHistoryController', () => {
       expect(controller.labels?.names.get(8)).toBe('New Example');
     } else expect(controller.labels).toBeNull();
     controller.destroy();
-  });
-
-  it('offers Split while destination labels are loading', async () => {
-    const late = deferredResponse();
-    const controller = new PersonMergeHistoryController(createAPIClient(async input => {
-      const path = new URL(requestOf(input).url).pathname;
-      if (path === '/api/v1/person-merges/41') return Response.json({ ...detail(), splits: [splitResult().split] });
-      if (path === '/api/v1/people/19') return late.promise;
-      throw new Error(`Unexpected request: ${path}`);
-    }), 7);
-    const loading = controller.selectMerge(41);
-    await vi.waitFor(() => expect(controller.detail?.merge.id).toBe(41));
-    expect(controller.canOfferSplit).toBe(true);
-    controller.destroy();
-    late.resolve(Response.json(person(19)));
-    await loading;
   });
 
   it('retains loaded labels when a detail reload fails', async () => {

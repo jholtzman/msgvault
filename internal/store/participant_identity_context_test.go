@@ -50,6 +50,15 @@ func TestGetParticipantIdentityContext(t *testing.T) {
 			Source: "archive_observation", Basis: "stable_provider_id"},
 	}, details.Links)
 
+	custom, _, err := st.EnsureCommunicationServiceContext(ctx, store.CommunicationServiceInput{Slug: "custom-chat", DisplayLabel: "Custom chat", ScopePolicy: store.ScopePolicyOptional, Normalization: store.NormalizationStripAtLower, NormalizationVersion: 1})
+	require.NoError(err)
+	reader, err := st.EnsureParticipantByIdentifier("handle", "@Reader", "Reader")
+	require.NoError(err)
+	require.NoError(st.ClassifyParticipantIdentifierServiceContext(ctx, "handle", "@Reader", &custom.ID, new("server"), new("example.org")))
+	details, err = st.GetParticipantIdentityContext(ctx, []int64{reader})
+	require.NoError(err)
+	assert.Contains(details.Identifiers, store.ParticipantIdentifierContext{ParticipantID: reader, Type: "handle", Value: "@Reader", DisplayValue: "@Reader", NormalizedValue: "reader", ServiceSlug: "custom-chat", ServiceLabel: "Custom chat", ScopeKind: "server", ScopeValue: "example.org"})
+
 	empty, err := st.GetParticipantIdentityContext(ctx, nil)
 	require.NoError(err)
 	assert.Empty(empty.Members)

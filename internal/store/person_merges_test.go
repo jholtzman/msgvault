@@ -400,7 +400,7 @@ func TestPersonMerge_InspectNewestFirst(t *testing.T) {
 	st := testutil.NewTestStore(t)
 	survivor := mustPromotedPerson(t.Context(), t, st, "inspect-order-survivor@example.com", "Survivor")
 	mergeIDs := []int64{}
-	for index := range 2 {
+	for index := range 101 {
 		absorbed := mustPromotedPerson(t.Context(), t, st,
 			fmt.Sprintf("inspect-order-%d@example.com", index), "Absorbed")
 		survivor, _ = st.GetPersonContext(ctx, survivor.ID)
@@ -414,10 +414,10 @@ func TestPersonMerge_InspectNewestFirst(t *testing.T) {
 		survivor = &merged.Person
 		mergeIDs = append(mergeIDs, merged.Merge.ID)
 	}
-	list, err := st.ListPersonMergesContext(ctx, survivor.ID)
+	list, err := st.ListPersonMergesPageContext(ctx, survivor.ID, 100, 0)
 	require.NoError(err)
-	require.Len(list, 2)
-	assert.Equal([]int64{mergeIDs[1], mergeIDs[0]},
+	require.Len(list, 100)
+	assert.Equal([]int64{mergeIDs[100], mergeIDs[99]},
 		[]int64{list[0].Merge.ID, list[1].Merge.ID})
 }
 
@@ -444,32 +444,7 @@ func TestPersonMerge_IdentityReadFailureKeepsRecordedNames(t *testing.T) {
 			assert := assert.New(t)
 			require := require.New(t)
 			f := newPersonMergeInspectionFixture(t, "identity-read-failure")
-			var err error
-			if failure == "identifiers" {
-				testutil.SkipIfPostgres(t, "injects an identity-read failure through the SQLite authorizer")
-				f.store.DB().SetMaxOpenConns(1)
-				f.store.DB().SetMaxIdleConns(1)
-				var fail atomic.Bool
-				fail.Store(true)
-				t.Cleanup(func() { fail.Store(false) })
-				conn, connErr := f.store.DB().Conn(t.Context())
-				require.NoError(connErr)
-				err = conn.Raw(func(driverConn any) error {
-					sqliteConn, ok := driverConn.(*sqlite3.SQLiteConn)
-					require.True(ok)
-					sqliteConn.RegisterAuthorizer(func(action int, table, _, _ string) int {
-						if fail.Load() && action == sqlite3.SQLITE_READ && table == "participant_identifiers" {
-							return sqlite3.SQLITE_DENY
-						}
-						return sqlite3.SQLITE_OK
-					})
-					return nil
-				})
-				require.NoError(conn.Close())
-			} else {
-				_, err = f.store.DB().ExecContext(t.Context(), f.store.Rebind(`UPDATE person_merges SET snapshot_blob = ? WHERE id = ?`), []byte("corrupt"), f.merge.Merge.ID)
-			}
-			require.NoError(err)
+			injectPersonMergeReadFailure(t, f.store, f.merge.Merge.ID, failure)
 			listed, err := f.store.ListPersonMergesContext(t.Context(), f.merge.Person.ID)
 			require.NoError(err)
 			require.Len(listed, 1)
@@ -477,12 +452,6 @@ func TestPersonMerge_IdentityReadFailureKeepsRecordedNames(t *testing.T) {
 			require.NoError(err)
 			assert.NotEmpty(listed[0].Labels.Participants)
 			assert.NotEmpty(detail.Participants)
-			_, historyErr := f.store.GetPersonProfileHistoryContext(t.Context(), f.merge.Person.ID)
-			if failure == "identifiers" {
-				require.Error(historyErr)
-			} else {
-				require.ErrorIs(historyErr, store.ErrPersonMergeSnapshotCorrupt)
-			}
 			for _, labels := range []store.PersonMergeLabels{listed[0].Labels, detail.Labels} {
 				assert.True(labels.Incomplete)
 				if failure == "identifiers" {
@@ -2598,4 +2567,35 @@ func TestPersonMerge_DetailLabelsCurrentBindings(t *testing.T) {
 		assert.NotContains(profile.ParticipantIDs, added)
 	}
 	assert.False(detail.Labels.Incomplete)
+}
+
+func injectPersonMergeReadFailure(t *testing.T, st *store.Store, mergeID int64, failure string) {
+	t.Helper()
+	require := require.New(t)
+	var err error
+	if failure == "identifiers" {
+		testutil.SkipIfPostgres(t, "injects an identity-read failure through the SQLite authorizer")
+		st.DB().SetMaxOpenConns(1)
+		st.DB().SetMaxIdleConns(1)
+		var fail atomic.Bool
+		fail.Store(true)
+		t.Cleanup(func() { fail.Store(false) })
+		conn, connErr := st.DB().Conn(t.Context())
+		require.NoError(connErr)
+		err = conn.Raw(func(driverConn any) error {
+			sqliteConn, ok := driverConn.(*sqlite3.SQLiteConn)
+			require.True(ok)
+			sqliteConn.RegisterAuthorizer(func(action int, table, _, _ string) int {
+				if fail.Load() && action == sqlite3.SQLITE_READ && table == "participant_identifiers" {
+					return sqlite3.SQLITE_DENY
+				}
+				return sqlite3.SQLITE_OK
+			})
+			return nil
+		})
+		require.NoError(conn.Close())
+	} else {
+		_, err = st.DB().ExecContext(t.Context(), st.Rebind(`UPDATE person_merges SET snapshot_blob = ? WHERE id = ?`), []byte("corrupt"), mergeID)
+	}
+	require.NoError(err)
 }

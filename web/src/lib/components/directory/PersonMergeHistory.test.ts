@@ -142,7 +142,6 @@ describe('PersonMergeHistory', () => {
 
   it('renders the projected phone on a merge card', async () => {
     const value = detail();
-    value.labels.members = [{ participant_id: 701, phone: '+12025550101', normalized_value: '+12025550101' }];
     renderHistory(value, { identifiers: addressIdentifiers() });
     await fireEvent.click(await screen.findByRole('button', { name: /^Open alex@example.org merged into Alex Example · / }));
     const cards = within(await screen.findByRole('group', { name: 'Merged profiles' }));
@@ -220,8 +219,11 @@ describe('PersonMergeHistory', () => {
 
   it('keeps a Splits row for a split no card address names', async () => {
     const mergeDetail = detail();
-    mergeDetail.participants = mergeDetail.participants!.map(participant => ({ ...participant, split_id: undefined }));
-    renderHistory(mergeDetail, { identifiers: addressIdentifiers() });
+    mergeDetail.participants = mergeDetail.participants!.filter(participant => participant.origin_side === 'survivor');
+    mergeDetail.labels.profiles[1].participant_ids = [];
+    mergeDetail.labels.members = mergeDetail.labels.members.filter(member => member.participant_id === 702);
+    mergeDetail.rows = [];
+    renderHistory(mergeDetail, { identifiers: addressIdentifiers().filter(identifier => identifier.participant_id === 702) });
     await fireEvent.click(await screen.findByRole('button', { name: /^Open .+ merged into .+ · / }));
     expect(await screen.findByRole('heading', { name: 'Splits' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Open Alex Restored' })).toBeDefined();
