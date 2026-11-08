@@ -36,12 +36,12 @@ func TestParseRejectsInvalidLines(t *testing.T) {
 			a := image("a-1.svg")
 			a.MIMEType = "image/svg+xml"
 			l.Attachments = []Attachment{a}
-		}, "attachment 0: mime_type is not a supported image type"},
+		}, "attachment 0: mime_type is not a supported image or video type"},
 		{"empty attachment", func(l *Line) {
 			a := image("a-1.png")
 			a.Size = 0
 			l.Attachments = []Attachment{a}
-		}, "attachment 0: size is not between"},
+		}, "attachment 0: size is not at least 1 byte"},
 		{"attachment without hash", func(l *Line) {
 			a := image("a-1.png")
 			a.SHA256 = ""
@@ -124,4 +124,13 @@ func TestDiscoverFilesListsFinishedCaptureFilesInNameOrder(t *testing.T) {
 
 func image(file string) Attachment {
 	return Attachment{File: file, MIMEType: "image/png", Size: 10, SHA256: hashOf("image")}
+}
+
+func TestParseAcceptsAVideoLargerThanAnImageMayBe(t *testing.T) {
+	l := line("v1", []string{ownerPhone, alice}, alice, "2026-03-14T18:22:00Z", "")
+	l.Attachments = []Attachment{{File: "a-1.mp4", MIMEType: "video/mp4", Size: MaxAttachmentBytes * 4, SHA256: hashOf("video")}}
+	path := filepath.Join(t.TempDir(), "a.jsonl")
+	writeCapture(t, path, l)
+	_, err := ParseFile(path, ownerPhone)
+	require.NoError(t, err)
 }

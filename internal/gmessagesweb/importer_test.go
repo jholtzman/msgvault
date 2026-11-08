@@ -360,3 +360,104 @@ func TestImportDirNeedsAttachmentsFolderForImages(t *testing.T) {
 	assert.ErrorContains(t, err, "no attachments folder is configured")
 	assert.FileExists(t, filepath.Join(dir, "a-1.png"))
 }
+
+// A made-up MP4: the importer checks the first bytes only.
+var mp4Video = []byte("\x00\x00\x00\x18ftypisom\x00\x00\x02\x00made-up video content")
+
+// withVideo lists a video file in dir on l, writing the file.
+func withVideo(t *testing.T, dir, name string, content []byte, l Line) Line {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), content, 0o600), "write video")
+	l.Attachments = append(l.Attachments, Attachment{
+		File: name, MIMEType: "video/mp4", Size: int64(len(content)), SHA256: hashOf(string(content)),
+	})
+	return l
+}
+
+func TestImportDirStoresVideosAndDeletesTheirFiles(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	f := storetest.New(t)
+	dir := t.TempDir()
+	imp := newImporter(f)
+	direct := []string{ownerPhone, alice}
+	l := withImage(t, dir, "a-1.png", pngImage, line("v1", direct, alice, "2026-03-14T18:22:00Z", ""))
+	l = withVideo(t, dir, "a-2.mp4", mp4Video, l)
+	writeCapture(t, filepath.Join(dir, "a.jsonl"), l)
+
+	summary, err := imp.ImportDir(t.Context(), dir)
+	require.NoError(err, "ImportDir")
+	assert.Equal(1, summary.ImagesImported)
+	assert.Equal(1, summary.VideosImported)
+	assertFolderEmpty(t, dir)
+
+	var filename, mimeType, mediaType, storagePath, contentHash string
+	var size int64
+	var count int
+	require.NoError(f.Store.DB().QueryRowContext(t.Context(), f.Store.Rebind(`
+		SELECT a.filename, a.mime_type, a.media_type, a.storage_path, a.content_hash, a.size, m.attachment_count
+		FROM attachments a JOIN messages m ON m.id = a.message_id
+		WHERE m.source_message_id = ? AND a.media_type = 'video'`), l.MessageID).
+		Scan(&filename, &mimeType, &mediaType, &storagePath, &contentHash, &size, &count), "read attachment")
+	assert.Equal("video-2.mp4", filename)
+	assert.Equal("video/mp4", mimeType)
+	assert.Equal(hashOf(string(mp4Video)), contentHash)
+	assert.Equal(int64(len(mp4Video)), size)
+	assert.Equal(2, count, "attachment_count")
+	stored, err := os.ReadFile(filepath.Join(imp.opts.AttachmentsDir, storagePath))
+	require.NoError(err, "read stored video")
+	assert.Equal(mp4Video, stored)
+}
+
+func TestImportDirLeavesFileWhoseVideoDoesNotMatch(t *testing.T) {
+	direct := []string{ownerPhone, alice}
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, dir string) Line
+		want  string
+	}{
+		{"missing video", func(t *testing.T, dir string) Line {
+			l := withVideo(t, dir, "a-1.mp4", mp4Video, line("v1", direct, alice, "2026-03-14T18:22:00Z", ""))
+			require.NoError(t, os.Remove(filepath.Join(dir, "a-1.mp4")))
+			return l
+		}, "line 2: attachment 0: file is missing"},
+		{"changed video", func(t *testing.T, dir string) Line {
+			l := withVideo(t, dir, "a-1.mp4", mp4Video, line("v1", direct, alice, "2026-03-14T18:22:00Z", ""))
+			changed := append([]byte{}, mp4Video...)
+			changed[len(changed)-1] ^= 1
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "a-1.mp4"), changed, 0o600))
+			return l
+		}, "line 2: attachment 0: file content does not match sha256"},
+		{"not the listed type", func(t *testing.T, dir string) Line {
+			return withVideo(t, dir, "a-1.mp4", pngImage, line("v1", direct, alice, "2026-03-14T18:22:00Z", ""))
+		}, "line 2: attachment 0: file content is not of its mime_type"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := storetest.New(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, "a.jsonl")
+			writeCapture(t, path, directLines()[0], tt.setup(t, dir))
+			_, err := newImporter(f).ImportDir(t.Context(), dir)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "capture file a.jsonl: "+tt.want)
+			assertMessageCount(t, f.Store, 0)
+			assert.FileExists(t, path)
+		})
+	}
+}
+
+func TestSniffVideo(t *testing.T) {
+	cases := map[string]string{
+		"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00":                 "video/mp4",
+		"\x00\x00\x00\x14ftypqt  \x00\x00\x02\x00":                 "video/quicktime",
+		"\x00\x00\x00\x18ftyp3gp4\x00\x00\x02\x00":                 "video/3gpp",
+		"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\x82\x84webm":     "video/webm",
+		"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\x82\x88matroska": "",
+		"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00":                 "",
+		"not a video": "",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, sniffVideo([]byte(in)), "%q", in)
+	}
+}

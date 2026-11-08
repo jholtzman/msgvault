@@ -45,8 +45,8 @@ type Line struct {
 	SentAt          string `json:"sent_at"`
 	SentAtPrecision string `json:"sent_at_precision"`
 	Text            string `json:"text"`
-	// Attachments are the message's images, each a file beside the capture
-	// file. The list is empty for a message without images.
+	// Attachments are the message's images and videos, each a file beside
+	// the capture file. The list is empty for a message without either.
 	Attachments []Attachment `json:"attachments"`
 	// CapturedAt is when the capture tool read the message.
 	CapturedAt string `json:"captured_at"`
@@ -55,10 +55,10 @@ type Line struct {
 	PageMessageID string `json:"page_message_id"`
 }
 
-// Attachment is one image of a message, stored in a file of its own in the
-// capture folder.
+// Attachment is one image or video of a message, stored in a file of its
+// own in the capture folder.
 type Attachment struct {
-	// File is the image file's name, directly inside the capture folder.
+	// File is the file's name, directly inside the capture folder.
 	File     string `json:"file"`
 	MIMEType string `json:"mime_type"`
 	// Size and SHA256 are checked against the file before it is stored.
@@ -72,9 +72,12 @@ type Message struct {
 
 	SentAtTime time.Time
 	Raw        []byte
-	// Content holds each attachment's bytes, in order, once LoadAttachments
-	// has read and checked them.
+	// Content holds each image's bytes, in order, once LoadAttachments has
+	// read and checked them. A video's entry is nil.
 	Content [][]byte
+	// Paths holds each attachment's file, in order, once LoadAttachments
+	// has checked it.
+	Paths []string
 }
 
 type ImportOptions struct {
@@ -82,7 +85,7 @@ type ImportOptions struct {
 	// every message's participants.
 	OwnerPhone string
 	// AttachmentsDir is the archive's attachment store. It is required to
-	// import a capture file that lists images.
+	// import a capture file that lists images or videos.
 	AttachmentsDir string
 }
 
@@ -92,6 +95,7 @@ type ImportSummary struct {
 	FilesFailed      int
 	MessagesImported int
 	ImagesImported   int
+	VideosImported   int
 	// MessageIDs are the archive IDs of messages written in this run,
 	// including messages from files that later failed.
 	MessageIDs []int64

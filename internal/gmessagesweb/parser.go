@@ -28,7 +28,7 @@ const (
 	MaxParticipants = 1000
 	// MaxPageMessageIDBytes bounds the page's own message ID.
 	MaxPageMessageIDBytes = 256
-	// MaxAttachments bounds the images in one message.
+	// MaxAttachments bounds the images and videos in one message.
 	MaxAttachments = 20
 	// MaxAttachmentBytes bounds one image, as the SMS Backup & Restore
 	// importer bounds an MMS part.
@@ -169,9 +169,11 @@ func (a *Attachment) validate() error {
 	switch {
 	case !attachmentFile.MatchString(a.File) || strings.HasSuffix(a.File, FileExtension):
 		return errors.New("file is not a plain file name in the capture folder")
-	case imageExtensions[a.MIMEType] == "":
-		return errors.New("mime_type is not a supported image type")
-	case a.Size < 1 || a.Size > MaxAttachmentBytes:
+	case imageExtensions[a.MIMEType] == "" && !isVideo(a.MIMEType):
+		return errors.New("mime_type is not a supported image or video type")
+	case a.Size < 1:
+		return errors.New("size is not at least 1 byte")
+	case !isVideo(a.MIMEType) && a.Size > MaxAttachmentBytes:
 		return fmt.Errorf("size is not between 1 and %d bytes", MaxAttachmentBytes)
 	case !hexSHA256.MatchString(a.SHA256):
 		return errors.New("sha256 is not a lowercase hex SHA-256")
@@ -179,20 +181,72 @@ func (a *Attachment) validate() error {
 	return nil
 }
 
-// LoadAttachments reads every image the messages list from dir into their
-// Content, checking each file's size, hash, and type against its listing.
-// The error names the message by its line.
+// LoadAttachments checks every file the messages list in dir against its
+// listing's size, hash, and type, and records each file's path. An image's
+// bytes are read into Content; a video, which may be large, is read as a
+// stream to check it and stored later from its path. The error names the
+// message by its line.
 func LoadAttachments(dir string, messages []Message) error {
 	for n := range messages {
 		msg := &messages[n]
 		msg.Content = make([][]byte, len(msg.Attachments))
+		msg.Paths = make([]string, len(msg.Attachments))
 		for k, a := range msg.Attachments {
-			data, err := readAttachment(filepath.Join(dir, a.File), a)
+			path := filepath.Join(dir, a.File)
+			msg.Paths[k] = path
+			if isVideo(a.MIMEType) {
+				if err := checkVideo(path, a); err != nil {
+					return &LineError{Line: n + 1, Err: fmt.Errorf("attachment %d: %w", k, err)}
+				}
+				continue
+			}
+			data, err := readAttachment(path, a)
 			if err != nil {
 				return &LineError{Line: n + 1, Err: fmt.Errorf("attachment %d: %w", k, err)}
 			}
 			msg.Content[k] = data
 		}
+	}
+	return nil
+}
+
+// checkVideo checks a video file against its listing without holding it in
+// memory.
+func checkVideo(path string, a Attachment) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return errors.New("file is missing")
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("file is not a regular file")
+	}
+	if info.Size() != a.Size {
+		return errors.New("file size does not match size")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	head := make([]byte, 64)
+	headLen, err := io.ReadFull(f, head)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if sniffVideo(head[:headLen]) != a.MIMEType {
+		return errors.New("file content is not of its mime_type")
+	}
+	h := sha256.New()
+	h.Write(head[:headLen])
+	size, err := io.Copy(h, f)
+	if err != nil {
+		return err
+	}
+	if size+int64(headLen) != a.Size || hex.EncodeToString(h.Sum(nil)) != a.SHA256 {
+		return errors.New("file content does not match sha256")
 	}
 	return nil
 }

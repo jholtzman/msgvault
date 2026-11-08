@@ -27,9 +27,9 @@ func NewImporter(st *store.Store, opts ImportOptions) *Importer {
 // ImportDir imports every capture file in dir as one sync run of the owner's
 // source.
 //
-// A file and the images it lists are deleted once all of its messages are
-// stored. A file that fails to parse or store stays where it is with its
-// images, so the next run retries it, and the run goes on to the remaining
+// A file and the images and videos it lists are deleted once all of its
+// messages are stored. A file that fails to parse or store stays where it is
+// with its attachments, so the next run retries it, and the run goes on to the remaining
 // files. The run then fails, naming each failed file.
 func (i *Importer) ImportDir(ctx context.Context, dir string) (ImportSummary, error) {
 	if !e164.MatchString(strings.TrimSpace(i.opts.OwnerPhone)) {
@@ -101,17 +101,17 @@ func (i *Importer) importFile(ctx context.Context, sourceID int64, path string, 
 	if err != nil {
 		return err
 	}
-	var images []string
+	var files []string
 	for _, msg := range messages {
 		for _, a := range msg.Attachments {
-			images = append(images, a.File)
+			files = append(files, a.File)
 		}
 	}
-	if len(images) > 0 && strings.TrimSpace(i.opts.AttachmentsDir) == "" {
-		return errors.New("file lists images, and no attachments folder is configured")
+	if len(files) > 0 && strings.TrimSpace(i.opts.AttachmentsDir) == "" {
+		return errors.New("file lists images or videos, and no attachments folder is configured")
 	}
-	// Every image is read and checked before any message is stored, as
-	// every line is parsed first.
+	// Every attachment is checked before any message is stored, as every
+	// line is parsed first.
 	dir := filepath.Dir(path)
 	if err := LoadAttachments(dir, messages); err != nil {
 		return err
@@ -125,17 +125,23 @@ func (i *Importer) importFile(ctx context.Context, sourceID int64, path string, 
 			return &LineError{Line: n + 1, Err: err}
 		}
 		summary.MessagesImported++
-		summary.ImagesImported += len(msg.Attachments)
+		for _, a := range msg.Attachments {
+			if isVideo(a.MIMEType) {
+				summary.VideosImported++
+			} else {
+				summary.ImagesImported++
+			}
+		}
 	}
-	// The capture file goes first: an image left behind by a failure below
-	// is never read again, while a capture file whose images were gone
-	// would fail on every later run.
+	// The capture file goes first: an attachment left behind by a failure
+	// below is never read again, while a capture file whose attachments
+	// were gone would fail on every later run.
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("remove imported file: %w", err)
 	}
-	for _, name := range images {
+	for _, name := range files {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("failed to remove imported Google Messages for web image",
+			slog.Warn("failed to remove imported Google Messages for web attachment",
 				"file", name,
 				"error", err)
 		}
@@ -230,11 +236,17 @@ func (i *Importer) importMessage(ctx context.Context, sourceID int64, msg Messag
 	return msgID, nil
 }
 
-// storeAttachments puts each image in the attachment store and records it
-// on the message. The capture file is deleted after the import, so each
-// image is written durably before its record.
+// storeAttachments puts each image and video in the attachment store and
+// records it on the message. The capture file is deleted after the import,
+// so each file is written durably before its record.
 func (i *Importer) storeAttachments(ctx context.Context, msgID int64, msg Message) error {
 	for n, a := range msg.Attachments {
+		if isVideo(a.MIMEType) {
+			if err := i.storeVideo(ctx, msgID, msg, n); err != nil {
+				return err
+			}
+			continue
+		}
 		filename := fmt.Sprintf("image-%d.%s", n+1, imageExtensions[a.MIMEType])
 		receipt, err := export.StoreAttachmentFileDurable(ctx, i.opts.AttachmentsDir, &mime.Attachment{
 			Filename:    filename,
@@ -259,6 +271,31 @@ func (i *Importer) storeAttachments(ctx context.Context, msgID int64, msg Messag
 		}); err != nil {
 			return fmt.Errorf("attachment %d: upsert attachment: %w", n, err)
 		}
+	}
+	return nil
+}
+
+// storeVideo streams one video from the capture folder into the attachment
+// store, so a large video is never held in memory.
+func (i *Importer) storeVideo(ctx context.Context, msgID int64, msg Message, n int) error {
+	a := msg.Attachments[n]
+	filename := fmt.Sprintf("video-%d.%s", n+1, videoExtensions[a.MIMEType])
+	storagePath, contentHash, _, err := export.StoreAttachmentFromPathDurable(ctx, i.opts.AttachmentsDir, msg.Paths[n], a.SHA256, a.Size, 0)
+	if err != nil {
+		return fmt.Errorf("attachment %d: store video: %w", n, err)
+	}
+	if err := i.store.UpsertAttachmentRecord(ctx, msgID, store.AttachmentWrite{
+		Filename:      filename,
+		MIMEType:      a.MIMEType,
+		StoragePath:   storagePath,
+		ContentHash:   contentHash,
+		Size:          a.Size,
+		MediaType:     "video",
+		Role:          store.AttachmentRoleStandalone,
+		RoleSource:    store.AttachmentRoleSourceImporterSemantics,
+		SourcePartKey: fmt.Sprintf("google-messages-web:video:%d", n),
+	}); err != nil {
+		return fmt.Errorf("attachment %d: upsert attachment: %w", n, err)
 	}
 	return nil
 }

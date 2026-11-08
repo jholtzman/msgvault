@@ -266,6 +266,18 @@ func hashSourceFile(f *os.File, srcPath string, maxSize int64) (string, int64, e
 // staging a new blob. expectedHash and expectedSize must come from a prior
 // trusted snapshot; maxSize bounds both reads when positive.
 func StoreAttachmentFromPathVerified(ctx context.Context, attachmentsDir, srcPath, expectedHash string, expectedSize, maxSize int64) (string, string, int64, error) {
+	return storeAttachmentFromPathVerified(ctx, attachmentsDir, srcPath, expectedHash, expectedSize, maxSize, packstore.AtomicPublication)
+}
+
+// StoreAttachmentFromPathDurable is StoreAttachmentFromPathVerified with the
+// blob and its directory synced before it returns, for a caller that deletes
+// the source file once the attachment is recorded. It streams the source, so
+// a large file is never held in memory.
+func StoreAttachmentFromPathDurable(ctx context.Context, attachmentsDir, srcPath, expectedHash string, expectedSize, maxSize int64) (string, string, int64, error) {
+	return storeAttachmentFromPathVerified(ctx, attachmentsDir, srcPath, expectedHash, expectedSize, maxSize, packstore.DurablePublication)
+}
+
+func storeAttachmentFromPathVerified(ctx context.Context, attachmentsDir, srcPath, expectedHash string, expectedSize, maxSize int64, durability packstore.Durability) (string, string, int64, error) {
 	if attachmentsDir == "" || srcPath == "" || expectedHash == "" || expectedSize < 0 {
 		return "", "", 0, errors.New("attachments dir, source path, and expected identity are required")
 	}
@@ -314,7 +326,7 @@ func StoreAttachmentFromPathVerified(ctx context.Context, attachmentsDir, srcPat
 		return "", contentHash, size, fmt.Errorf("rewind attachment source: %w", err)
 	}
 	result, writeErr := loose.Write(ctx, &ContextReader{Context: ctx, Reader: f}, packstore.WriteOptions{
-		Durability:   packstore.AtomicPublication,
+		Durability:   durability,
 		Dedup:        packstore.VerifyFullHash,
 		ExpectedHash: hash,
 		ExpectedSize: size,

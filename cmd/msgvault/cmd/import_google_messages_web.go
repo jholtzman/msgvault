@@ -19,8 +19,8 @@ func newImportGoogleMessagesWebCmd() *cobra.Command {
 		Use:   "import-google-messages-web <folder>",
 		Short: "Import conversations captured from Google Messages for web",
 		Long: `Import every capture file in a folder of conversations captured from
-Google Messages for web, with the images each file lists. Each file and its
-images are deleted once all of its messages are stored. A file that fails to
+Google Messages for web, with the images and videos each file lists. Each
+file and its attachments are deleted once all of its messages are stored. A file that fails to
 import stays in the folder and is named in the error, and the remaining files
 are still imported.`,
 		Args: cobra.ExactArgs(1),
@@ -41,8 +41,8 @@ are still imported.`,
 			}
 			defer cleanup()
 			summary, err := importGoogleMessagesWeb(cmd.Context(), st, args[0], opts.OwnerPhone, opts.OwnerPhone)
-			cmd.Printf("Imported %d messages and %d images from %d of %d files\n",
-				summary.MessagesImported, summary.ImagesImported, summary.FilesImported, summary.FilesSeen)
+			cmd.Printf("Imported %d messages, %d images and %d videos from %d of %d files\n",
+				summary.MessagesImported, summary.ImagesImported, summary.VideosImported, summary.FilesImported, summary.FilesSeen)
 			return err
 		},
 	}
@@ -95,7 +95,8 @@ func runScheduledGoogleMessagesWebSource(ctx context.Context, st *store.Store, s
 	if state := invocationFromContext(ctx); state != nil && state.logger != nil {
 		state.logger.Info("google-messages-web import finished", "source", src.Name,
 			"files", summary.FilesImported, "failed_files", summary.FilesFailed, "messages", summary.MessagesImported,
-			"images", summary.ImagesImported)
+			"images", summary.ImagesImported,
+			"videos", summary.VideosImported)
 	}
 	return recordSyncAttempt(ctx, gmessagesweb.SourceType, src.OwnerPhone, err)
 }
