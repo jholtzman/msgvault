@@ -427,7 +427,7 @@ it.each([
   await fireEvent.click(await screen.findByRole('button', { name: 'Add Exa' }));
   await fireEvent.input(screen.getByLabelText('Exa name'), { target: { value: name } });
   await fireEvent.submit(screen.getByRole('form', { name: 'Add Exa' }));
-  expect((await screen.findByRole('alert')).textContent).toContain(error);
+  await waitFor(() => expect(screen.getAllByRole('alert').map(alert => alert.textContent).join(' ')).toContain(error));
   expect(seen.filter(request => request.method !== 'GET')).toEqual([]);
 });
 

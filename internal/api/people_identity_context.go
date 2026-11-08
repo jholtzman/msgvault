@@ -17,19 +17,14 @@ func enrichIdentityContext(person *query.PersonSummary, details *store.Participa
 	if person == nil || details == nil {
 		return
 	}
-	members := make(map[int64]store.ParticipantIdentityMember, len(details.Members))
+	members := make(map[int64]store.PersonClusterMember, len(details.Members))
 	if person.Cluster != nil {
 		person.Cluster.Members = make([]query.PersonClusterMember, 0, len(details.Members))
 	}
 	for _, member := range details.Members {
 		members[member.ParticipantID] = member
 		if person.Cluster != nil {
-			person.Cluster.Members = append(person.Cluster.Members, query.PersonClusterMember{
-				ParticipantID: member.ParticipantID,
-				DisplayName:   member.DisplayName,
-				Email:         member.Email,
-				Phone:         member.Phone,
-			})
+			person.Cluster.Members = append(person.Cluster.Members, member)
 		}
 	}
 	type identifierKey struct {

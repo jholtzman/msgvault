@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import type { PersonContactPoint } from '../src/lib/api/generated/models';
 import { installDirectoryReviewArchive, installMixedArchive } from './e2e/fixtures/mixed-archive';
 const peopleURL = '/?explore=' + encodeURIComponent(JSON.stringify({ workspace: 'relationships' }));
 const duplicatesURL = '/?explore=' + encodeURIComponent(JSON.stringify({ workspace: 'relationships', peopleDuplicates: true }));
@@ -34,7 +35,7 @@ test('People Filter restores History on reload and To review on Back', async ({ 
   await expect(page.getByRole('radio', { name: 'To review', exact: true })).toBeChecked();
 });
 
-test('History wraps long provenance at phone width', async ({ page }) => {
+test('History keeps provenance short and inside its row at phone width', async ({ page }) => {
   await installDirectoryReviewArchive(page);
   await page.setViewportSize({ width: 390, height: 900 });
   const profile = { id: 7, name: 'Synthetic One' };
@@ -52,14 +53,45 @@ test('History wraps long provenance at phone width', async ({ page }) => {
   await page.getByRole('menuitem', { name: 'History', exact: true }).click();
   const historyDialog = page.getByRole('dialog', { name: 'History', exact: true });
   await historyDialog.getByText('1 earlier value', { exact: true }).click();
-  const metadata = historyDialog.locator('.meta').filter({ hasText: reference });
+  // The provenance line is who and when; the long source reference stays off the screen.
+  const metadata = historyDialog.locator('.detail-row', { hasText: 'Earlier name' }).locator('.description');
   await expect.poll(() => metadata.evaluate(element => {
-    const row = element.closest('li')!;
+    const row = element.closest('.detail-row')!;
     const bounds = row.getBoundingClientRect();
     const range = document.createRange(); range.selectNodeContents(element);
     return [...range.getClientRects()].every(rect => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1);
   })).toBe(true);
   expect(await historyDialog.locator('.profile-history').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await historyDialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(historyDialog).toBeHidden();
+});
+
+test('History lays its groups and rows on the Layout scale', async ({ page }) => {
+  await installDirectoryReviewArchive(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const profile = { id: 7, name: 'Synthetic One' };
+  const envelope = (id: number) => ({ id, ordinal: 0, source: 'manual', actor: 'user', confidence: 1, active_from: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', vcard: {} });
+  await page.route(`**/api/v1/people/${profile.id}/profile/history`, route => route.fulfill({ json: {
+    person: { id: profile.id, revision: 4, display_name: profile.name, participant_ids: [], vcard_uid: `synthetic-${profile.id}`, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z' },
+    names: [{ person_id: profile.id, name_kind: 'formatted', formatted: profile.name, original_value: profile.name, is_derived: false, envelope: envelope(71) }],
+    contact_points: [{ person_id: profile.id, address_kind: 'email', original_value: 'one@example.org', normalized_value: 'one@example.org', normalization: 'email', normalization_version: 1, envelope: envelope(72) } satisfies PersonContactPoint],
+    addresses: [], dates: [], categories: [], media: [], observations: [],
+  } }));
+  await page.goto('/?explore=' + encodeURIComponent(JSON.stringify({ workspace: 'relationships', directoryPersonID: 7 })));
+  await page.getByRole('button', { name: 'More actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'History', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'History', exact: true });
+  const names = dialog.getByRole('heading', { name: 'Names', exact: true });
+  const email = dialog.getByRole('heading', { name: 'Email and phone', exact: true });
+  await expect(email).toBeVisible();
+  const rect = (locator: import('@playwright/test').Locator) => locator.evaluate(el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height }; });
+  const nameHeading = await rect(names);
+  const nameRow = await rect(dialog.locator('.detail-row', { hasText: profile.name }));
+  const emailHeading = await rect(email);
+  // A group's heading is 8 above its rows, a value over its provenance line is a 54 row, and groups are 24 apart.
+  expect.soft(nameRow.top - nameHeading.bottom, 'heading to rows').toBe(8);
+  expect.soft(nameRow.height, 'two-line row').toBe(54);
+  expect.soft(emailHeading.top - nameRow.bottom, 'between groups').toBe(24);
 });
 
 

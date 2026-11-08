@@ -41,7 +41,7 @@ func (s *Store) ListPersonMergesPageContext(
 			merge_record.survivor_uid, merge_record.absorbed_uid,
 			merge_record.survivor_revision_before, merge_record.absorbed_revision_before,
 			merge_record.survivor_revision_after, merge_record.actor,
-			merge_record.snapshot_version, merge_record.snapshot_sha256, merge_record.created_at,
+			merge_record.snapshot_version, merge_record.snapshot_sha256, merge_record.created_at, merge_record.snapshot_blob,
 			(SELECT COUNT(*) FROM person_merge_participants lineage_count
 			 WHERE lineage_count.merge_id = merge_record.id),
 			(SELECT COUNT(*) FROM person_merge_rows row_count
@@ -72,6 +72,7 @@ func (s *Store) ListPersonMergesPageContext(
 		for rows.Next() {
 			var summary PersonMergeSummary
 			var currentID sql.NullInt64
+			var snapshotBlob []byte
 			if err := rows.Scan(
 				&summary.Merge.ID, &summary.Merge.SurvivorPersonID,
 				&summary.Merge.AbsorbedPersonID, &currentID,
@@ -79,7 +80,7 @@ func (s *Store) ListPersonMergesPageContext(
 				&summary.Merge.SurvivorRevisionBefore, &summary.Merge.AbsorbedRevisionBefore,
 				&summary.Merge.SurvivorRevisionAfter, &summary.Merge.Actor,
 				&summary.Merge.SnapshotVersion, &summary.Merge.SnapshotSHA256,
-				&summary.Merge.CreatedAt, &summary.ParticipantCount, &summary.RowCount,
+				&summary.Merge.CreatedAt, &snapshotBlob, &summary.ParticipantCount, &summary.RowCount,
 				&summary.SplitCount, &summary.PendingCandidateCount,
 			); err != nil {
 				_ = rows.Close()
@@ -88,6 +89,7 @@ func (s *Store) ListPersonMergesPageContext(
 			if currentID.Valid {
 				summary.Merge.CurrentPersonID = &currentID.Int64
 			}
+			summary.Labels = personMergeRecordedLabels(snapshotBlob, summary.Merge.SnapshotSHA256)
 			summary.RowActionCounts = map[string]int{}
 			mergeIDs = append(mergeIDs, summary.Merge.ID)
 			result = append(result, summary)
@@ -131,11 +133,34 @@ func (s *Store) ListPersonMergesPageContext(
 		if err := actionRows.Close(); err != nil {
 			return fmt.Errorf("close person merge page row actions: %w", err)
 		}
-		return nil
+		lineage, err := tx.QueryContext(ctx, `SELECT merge_id, participant_id, origin_side, split_id
+			FROM person_merge_participants WHERE merge_id IN (`+personMergeSnapshotPlaceholders(len(mergeIDs))+`) ORDER BY merge_id, participant_id`, personMergeSnapshotIDArgs(mergeIDs)...)
+		if err != nil {
+			return fmt.Errorf("list merge page participants: %w", err)
+		}
+		defer func() { _ = lineage.Close() }()
+		for lineage.Next() {
+			var participant PersonMergeParticipant
+			var splitID sql.NullInt64
+			if err := lineage.Scan(&participant.MergeID, &participant.ParticipantID, &participant.OriginSide, &splitID); err != nil {
+				return fmt.Errorf("scan merge page participant: %w", err)
+			}
+			if splitID.Valid {
+				participant.SplitID = &splitID.Int64
+			}
+			labels := &summariesByID[participant.MergeID].Labels
+			labels.Participants = append(labels.Participants, participant)
+		}
+		return lineage.Err()
 	})
 	if err != nil {
 		return nil, err
 	}
+	labels := make([]*PersonMergeLabels, len(result))
+	for i := range result {
+		labels[i] = &result[i].Labels
+	}
+	s.loadPersonMergeIdentities(ctx, labels, nil)
 	return result, nil
 }
 
@@ -146,6 +171,7 @@ func (s *Store) GetPersonMergeContext(
 		return nil, ErrPersonMergeNotFound
 	}
 	var detail *PersonMergeDetail
+	var currentParticipantIDs []int64
 	err := s.withReadSnapshotContext(ctx, func(tx *loggedTx) error {
 		merge, err := s.getPersonMergeTx(ctx, tx, mergeID)
 		if err != nil {
@@ -167,8 +193,20 @@ func (s *Store) GetPersonMergeContext(
 		if err != nil {
 			return err
 		}
+		var blob []byte
+		if err := tx.QueryRowContext(ctx, `SELECT snapshot_blob FROM person_merges WHERE id = ?`, mergeID).Scan(&blob); err != nil {
+			return err
+		}
+		if merge.CurrentPersonID != nil {
+			current, err := s.getPersonTx(ctx, tx, *merge.CurrentPersonID)
+			if err != nil {
+				return err
+			}
+			currentParticipantIDs = current.ParticipantIDs
+		}
 		detail = &PersonMergeDetail{
-			Merge: *merge, Participants: participants, Rows: rows,
+			Labels: personMergeRecordedLabels(blob, merge.SnapshotSHA256),
+			Merge:  *merge, Participants: participants, Rows: rows,
 			Splits: splits, ReviewCandidates: candidates,
 		}
 		return nil
@@ -176,6 +214,8 @@ func (s *Store) GetPersonMergeContext(
 	if err != nil {
 		return nil, err
 	}
+	detail.Labels.Participants = detail.Participants
+	s.loadPersonMergeIdentities(ctx, []*PersonMergeLabels{&detail.Labels}, currentParticipantIDs)
 	return detail, nil
 }
 
@@ -524,4 +564,60 @@ func (s *Store) acceptPersonMergeCandidateValueTx(
 		return 0, err
 	}
 	return inserted.ID, nil
+}
+
+func personMergeRecordedLabels(blob []byte, digest string) PersonMergeLabels {
+	labels := PersonMergeLabels{Profiles: []PersonMergeRecordedProfile{}, Participants: []PersonMergeParticipant{}, Members: []PersonClusterMember{}, Identifiers: []ParticipantIdentifierContext{}}
+	snapshot, err := decodePersonMergeSnapshot(blob, digest)
+	if err != nil {
+		labels.Incomplete = true
+		return labels
+	}
+	for _, profile := range snapshot.Persons {
+		labels.Profiles = append(labels.Profiles, PersonMergeRecordedProfile{ID: profile.ID, DisplayName: profile.DisplayName, ParticipantIDs: profile.ParticipantIDs})
+	}
+	return labels
+}
+
+func (s *Store) loadPersonMergeIdentities(ctx context.Context, labels []*PersonMergeLabels, currentIDs []int64) {
+	ids := append([]int64{}, currentIDs...)
+	for _, label := range labels {
+		for _, participant := range label.Participants {
+			ids = append(ids, participant.ParticipantID)
+		}
+	}
+	identities, err := s.getParticipantIdentityContext(ctx, ids, false)
+	for _, label := range labels {
+		if err != nil {
+			label.Incomplete = true
+			continue
+		}
+		wanted := map[int64]bool{}
+		for _, id := range currentIDs {
+			wanted[id] = true
+		}
+		for _, participant := range label.Participants {
+			wanted[participant.ParticipantID] = true
+		}
+		for _, member := range identities.Members {
+			if wanted[member.ParticipantID] {
+				value, kind := member.Email, ContactAddressEmail
+				if value == "" {
+					value, kind = member.Phone, ContactAddressPhone
+				}
+				if value != "" {
+					member.NormalizedValue, _ = NormalizeServiceValue(nil, kind, value)
+				}
+				label.Members = append(label.Members, member)
+			}
+		}
+		for _, identifier := range identities.Identifiers {
+			if wanted[identifier.ParticipantID] {
+				if identifier.ServiceSlug == "" && (identifier.Type == "email" || identifier.Type == "phone") {
+					identifier.ServiceSlug = identifier.Type
+				}
+				label.Identifiers = append(label.Identifiers, identifier)
+			}
+		}
+	}
 }

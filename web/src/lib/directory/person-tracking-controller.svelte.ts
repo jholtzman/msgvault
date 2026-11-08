@@ -13,7 +13,7 @@ type GeneratedTarget = GeneratedTargetDescriptor;
 export type PersonTrackingState = Pick<GeneratedTracking, 'person_id' | 'tracked' | 'tracked_at'>;
 export type PersonTrackingTarget = Pick<
   GeneratedTarget,
-  'kind' | 'description' | 'value_type' | 'cardinality' | 'sensitive'
+  'key' | 'kind' | 'slug' | 'description' | 'sensitive'
 >;
 export type PersonTrackingOutcome =
   | {
@@ -45,7 +45,10 @@ export class PersonTrackingController {
   trackingError = $state<string | null>(null);
   catalogError = $state<string | null>(null);
   stateUnknown = $state(false);
+  /** The switch position a save didn't reach, while the read-back shows it didn't land. Retry saves it again. */
+  failedSave = $state<boolean | null>(null);
   catalogIncludesSensitive = $state(false);
+  catalogRequestedSensitive = $state(false);
   announcement = $state<string | null>(null);
   private readonly client: APIClient;
   private disposed = false;
@@ -69,21 +72,17 @@ export class PersonTrackingController {
     if (this.disposed || !Number.isSafeInteger(personID) || personID <= 0) return;
     this.contextGeneration += 1;
     this.trackingGeneration += 1;
-    this.catalogGeneration += 1;
     this.mutationGeneration += 1;
     this.trackingAbort?.abort();
-    this.catalogAbort?.abort();
     this.mutationAbort?.abort();
     this.personID = personID;
     this.tracking = undefined;
-    this.targets = [];
     this.trackingError = null;
-    this.catalogError = null;
     this.pending = false;
     this.stateUnknown = false;
-    this.catalogIncludesSensitive = false;
+    this.failedSave = null;
     this.announcement = null;
-    await Promise.all([this.loadTracking(personID), this.loadCatalog(false)]);
+    await this.loadTracking(personID);
   }
   async setTracked(desired: boolean): Promise<PersonTrackingOutcome> {
     const personID = this.personID;
@@ -105,6 +104,7 @@ export class PersonTrackingController {
     this.mutationAbort = abort;
     this.pending = true;
     this.trackingError = null;
+    this.failedSave = null;
     this.announcement = null;
     try {
       const result = await generatedSetPersonTracking(
@@ -122,7 +122,8 @@ export class PersonTrackingController {
         return { kind: 'confirmed', desired };
       }
       if (result.response.status === 400 || result.response.status === 404) {
-        this.trackingError = 'Unable to update profile maintenance tracking.';
+        this.failedSave = desired;
+        this.trackingError = "Couldn't save.";
         return { kind: 'error', desired };
       }
       return await this.reconcileMutation(personID, desired, context, mutation);
@@ -140,9 +141,17 @@ export class PersonTrackingController {
     if (this.personID === undefined || this.disposed || this.trackingLoading || this.pending) return;
     await this.loadTracking(this.personID);
   }
-  async retryCatalog(includeSensitive: boolean): Promise<void> {
-    if (this.personID === undefined || this.disposed || this.catalogLoading) return;
+  /** Saves the position a failed save didn't reach. */
+  async retrySave(): Promise<PersonTrackingOutcome> {
+    const desired = this.failedSave;
+    if (desired === null) return { kind: 'ignored' };
+    return await this.setTracked(desired);
+  }
+  async retryCatalog(includeSensitive = this.catalogRequestedSensitive): Promise<void> {
+    this.catalogRequestedSensitive = includeSensitive;
+    if (this.disposed || this.catalogLoading) return;
     await this.loadCatalog(includeSensitive);
+    if (this.catalogRequestedSensitive !== includeSensitive) await this.retryCatalog();
   }
   destroy(): void {
     if (this.disposed) return;
@@ -163,23 +172,28 @@ export class PersonTrackingController {
   ): Promise<PersonTrackingOutcome> {
     const reconciled = await this.loadTracking(personID);
     if (!this.currentMutation(context, mutation, personID)) return { kind: 'ignored' };
-    if (reconciled) {
+    if (reconciled && this.tracking?.tracked === desired) {
       this.trackingError = null;
       this.stateUnknown = false;
-      this.announcement = 'Profile maintenance state refreshed.';
+      this.announcement = announce(desired);
       return { kind: 'reconciled', desired };
     }
+    // The read-back shows the switch where it was: the save didn't land, and Retry saves it again.
+    if (reconciled) {
+      this.failedSave = desired;
+      this.trackingError = "Couldn't save.";
+      return { kind: 'error', desired };
+    }
     this.stateUnknown = true;
-    this.trackingError = 'Current profile maintenance state is unknown. Retry state before changing tracking.';
+    this.trackingError = "Couldn't check whether the change was saved.";
     return { kind: 'unknown', desired };
   }
   private applyConfirmed(tracking: PersonTrackingState): void {
     this.tracking = tracking;
     this.trackingError = null;
     this.stateUnknown = false;
-    this.announcement = tracking.tracked
-      ? 'Profile maintenance tracking enabled.'
-      : 'Profile maintenance tracking disabled.';
+    this.failedSave = null;
+    this.announcement = announce(tracking.tracked);
   }
   private async loadTracking(personID: number): Promise<boolean> {
     const context = this.contextGeneration;
@@ -189,6 +203,7 @@ export class PersonTrackingController {
     this.trackingAbort = abort;
     this.trackingLoading = true;
     this.trackingError = null;
+    this.failedSave = null;
     try {
       const { data } = await generatedGetPersonTracking(
         { id: personID },
@@ -202,7 +217,7 @@ export class PersonTrackingController {
       if (!tracking || tracking.person_id !== personID) {
         this.tracking = undefined;
         this.stateUnknown = true;
-        this.trackingError = 'Unable to load profile maintenance state.';
+        this.trackingError = "Couldn't check this profile's updates.";
         return false;
       }
       this.tracking = tracking;
@@ -212,7 +227,7 @@ export class PersonTrackingController {
       if (!this.currentTracking(context, request, personID, abort.signal)) return false;
       this.tracking = undefined;
       this.stateUnknown = true;
-      this.trackingError = 'Unable to load profile maintenance state.';
+      this.trackingError = "Couldn't check this profile's updates.";
       return false;
     } finally {
       if (this.currentTracking(context, request, personID)) {
@@ -222,9 +237,6 @@ export class PersonTrackingController {
     }
   }
   private async loadCatalog(includeSensitive: boolean): Promise<boolean> {
-    const personID = this.personID;
-    if (personID === undefined) return false;
-    const context = this.contextGeneration;
     const request = ++this.catalogGeneration;
     this.catalogAbort?.abort();
     const abort = new AbortController();
@@ -232,28 +244,29 @@ export class PersonTrackingController {
     this.catalogLoading = true;
     this.catalogError = null;
     try {
-      const { data } = await generatedListPersonFactTargets(
+      const { data, response } = await generatedListPersonFactTargets(
         { include_sensitive: includeSensitive },
         {
           ...this.client,
           signal: abort.signal,
         },
       );
-      if (!this.currentCatalog(context, request, personID, abort.signal)) return false;
+      if (!this.currentCatalog(request, abort.signal)) return false;
       const targets = data ? safeTargets(data.targets) : undefined;
       if (!targets) {
-        this.catalogError = 'Unable to load eligible profile fields.';
+        this.catalogError = data ? "The server's list of fields couldn't be read." : `The server answered ${response.status}.`;
         return false;
       }
       this.targets = targets;
       this.catalogIncludesSensitive = includeSensitive;
       return true;
-    } catch {
-      if (!this.currentCatalog(context, request, personID, abort.signal)) return false;
-      this.catalogError = 'Unable to load eligible profile fields.';
+    } catch (cause: unknown) {
+      if (!this.currentCatalog(request, abort.signal)) return false;
+      // Details holds what went wrong as it was reported; the notice says what didn't load.
+      this.catalogError = cause instanceof Error && cause.message ? cause.message : "Couldn't reach msgvault.";
       return false;
     } finally {
-      if (this.currentCatalog(context, request, personID)) {
+      if (this.currentCatalog(request)) {
         if (this.catalogAbort === abort) this.catalogAbort = undefined;
         this.catalogLoading = false;
       }
@@ -265,12 +278,15 @@ export class PersonTrackingController {
   private currentTracking(context: number, request: number, personID: number, signal?: AbortSignal): boolean {
     return this.current(context, personID, signal) && this.trackingGeneration === request;
   }
-  private currentCatalog(context: number, request: number, personID: number, signal?: AbortSignal): boolean {
-    return this.current(context, personID, signal) && this.catalogGeneration === request;
+  private currentCatalog(request: number, signal?: AbortSignal): boolean {
+    return !this.disposed && !signal?.aborted && this.catalogGeneration === request;
   }
   private currentMutation(context: number, request: number, personID: number, signal?: AbortSignal): boolean {
     return this.current(context, personID, signal) && this.mutationGeneration === request;
   }
+}
+function announce(tracked: boolean): string {
+  return tracked ? 'Keeping this profile updated.' : 'No longer keeping this profile updated.';
 }
 function safeTracking(value: GeneratedTracking): PersonTrackingState | undefined {
   if (!Number.isSafeInteger(value.person_id) || value.person_id <= 0 || typeof value.tracked !== 'boolean')
@@ -283,18 +299,18 @@ function safeTargets(values: GeneratedTarget[] | null): PersonTrackingTarget[] |
   const targets: PersonTrackingTarget[] = [];
   for (const value of values) {
     if (
+      typeof value.key !== 'string' ||
       typeof value.kind !== 'string' ||
+      typeof value.slug !== 'string' ||
       typeof value.description !== 'string' ||
-      typeof value.value_type !== 'string' ||
-      typeof value.cardinality !== 'string' ||
       typeof value.sensitive !== 'boolean'
     )
       return undefined;
     targets.push({
+      key: value.key,
       kind: value.kind,
+      slug: value.slug,
       description: value.description,
-      value_type: value.value_type,
-      cardinality: value.cardinality,
       sensitive: value.sensitive,
     });
   }

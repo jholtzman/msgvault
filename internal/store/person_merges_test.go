@@ -427,6 +427,32 @@ func TestPersonMerge_Snapshot(t *testing.T) {
 	require.NoError(t, err)
 	_, err = f.store.GetPersonMergeSnapshotContext(ctx, f.merge.Merge.ID)
 	require.ErrorIs(t, err, store.ErrPersonMergeSnapshotCorrupt)
+	listed, err := f.store.ListPersonMergesContext(ctx, f.merge.Person.ID)
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.True(listed[0].Labels.Incomplete)
+	assert.NotEmpty(listed[0].Labels.Participants)
+	assert.NotEmpty(listed[0].Labels.Members)
+
+}
+
+func TestPersonMerge_IdentityReadFailureKeepsRecordedNames(t *testing.T) {
+	f := newPersonMergeInspectionFixture(t, "identity-read-failure")
+	_, err := f.store.DB().ExecContext(t.Context(), "DROP TABLE participant_identifiers")
+	require.NoError(t, err)
+	listed, err := f.store.ListPersonMergesContext(t.Context(), f.merge.Person.ID)
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.True(t, listed[0].Labels.Incomplete)
+	assert.Len(t, listed[0].Labels.Profiles, 2)
+	assert.NotEmpty(t, listed[0].Labels.Participants)
+	assert.Empty(t, listed[0].Labels.Members)
+	detail, err := f.store.GetPersonMergeContext(t.Context(), f.merge.Merge.ID)
+	require.NoError(t, err)
+	assert.True(t, detail.Labels.Incomplete)
+	assert.Len(t, detail.Labels.Profiles, 2)
+	assert.NotEmpty(t, detail.Labels.Participants)
+	assert.Empty(t, detail.Labels.Members)
 }
 
 func TestPersonMerge_CandidateDecisionAcceptedAndIdempotent(t *testing.T) {
@@ -2509,4 +2535,28 @@ func TestMergePersons_MovesBriefEnrollmentToSurvivor(t *testing.T) {
 			assert.Equal(test.wantAction, action)
 		})
 	}
+}
+
+func TestPersonMerge_DetailLabelsCurrentBindings(t *testing.T) {
+	f := newPersonMergeInspectionFixture(t, "detail-current-labels")
+	ctx := t.Context()
+	added, err := f.store.EnsureParticipant("Later@Example.org", "Later sender", "example.org")
+	require.NoError(t, err)
+	current, err := f.store.GetPersonContext(ctx, f.merge.Person.ID)
+	require.NoError(t, err)
+	_, err = f.store.LinkParticipants(current.ParticipantIDs[0], added)
+	require.NoError(t, err)
+	service, _, err := f.store.EnsureCommunicationServiceContext(ctx, store.CommunicationServiceInput{Slug: "custom-chat", DisplayLabel: "Custom chat", ScopePolicy: store.ScopePolicyOptional, Normalization: store.NormalizationStripAtLower, NormalizationVersion: 1})
+	require.NoError(t, err)
+	handle, err := f.store.EnsureParticipantByIdentifier("handle", "@Reader", "Reader")
+	require.NoError(t, err)
+	require.NoError(t, f.store.ClassifyParticipantIdentifierServiceContext(ctx, "handle", "@Reader", &service.ID, new("server"), new("example.org")))
+	_, err = f.store.LinkParticipants(current.ParticipantIDs[0], handle)
+	require.NoError(t, err)
+	detail, err := f.store.GetPersonMergeContext(ctx, f.merge.Merge.ID)
+	require.NoError(t, err)
+	assert.Contains(t, detail.Labels.Members, store.PersonClusterMember{ParticipantID: added, DisplayName: "Later sender", Email: "Later@Example.org", NormalizedValue: "later@example.org"})
+	assert.NotContains(t, detail.Labels.Participants, store.PersonMergeParticipant{MergeID: f.merge.Merge.ID, ParticipantID: added})
+	assert.Contains(t, detail.Labels.Identifiers, store.ParticipantIdentifierContext{ParticipantID: handle, Type: "handle", Value: "@Reader", DisplayValue: "@Reader", NormalizedValue: "reader", ServiceSlug: "custom-chat", ServiceLabel: "Custom chat", ScopeKind: "server", ScopeValue: "example.org"})
+	assert.False(t, detail.Labels.Incomplete)
 }

@@ -1223,9 +1223,11 @@ function reviewMerge(): PersonMerge {
 function reviewMergeDetail(splitCompleted = false): PersonMergeDetail {
   return {
     merge: reviewMerge(),
+    labels: { ...reviewMergeSummary(splitCompleted).labels, identifiers: [701, 702, 901].map(participant_id => ({ participant_id, type: 'email', value: `person${participant_id}@example.org`, normalized_value: `person${participant_id}@example.org`, display_value: '', service_slug: 'email', service_label: 'Email', scope_kind: '', scope_value: '' })) },
     participants: [
       { merge_id: 41, participant_id: 901, origin_side: 'absorbed', ...(splitCompleted ? { split_id: 55 } : {}) },
       { merge_id: 41, participant_id: 701, origin_side: 'survivor' },
+      { merge_id: 41, participant_id: 702, origin_side: 'survivor' },
     ],
     rows: [
       {
@@ -1248,7 +1250,13 @@ function reviewMergeDetail(splitCompleted = false): PersonMergeDetail {
 function reviewMergeSummary(splitCompleted = false): PersonMergeSummary {
   return {
     merge: reviewMerge(),
-    participant_count: 2,
+    labels: {
+      profiles: [{ id: 7, display_name: 'Synthetic One', participant_ids: [701, 702] }, { id: 9, display_name: 'Synthetic Two', participant_ids: [901] }],
+      participants: [{ merge_id: 41, participant_id: 901, origin_side: 'absorbed', ...(splitCompleted ? { split_id: 55 } : {}) }, { merge_id: 41, participant_id: 701, origin_side: 'survivor' }, { merge_id: 41, participant_id: 702, origin_side: 'survivor' }],
+      members: [], incomplete: false,
+      identifiers: [701, 702, 901].map(participant_id => ({ participant_id, type: 'email', value: `person${participant_id}@example.org`, normalized_value: `person${participant_id}@example.org`, display_value: '', service_slug: 'email', service_label: 'Email', scope_kind: '', scope_value: '' })),
+    },
+    participant_count: 3,
     pending_candidate_count: 0,
     row_action_counts: { copied: 1 },
     row_count: 1,

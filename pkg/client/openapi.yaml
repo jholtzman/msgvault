@@ -10562,6 +10562,38 @@ components:
         - cache_revision
         - search_provenance
       type: object
+    ParticipantIdentifierContext:
+      properties:
+        display_value:
+          type: string
+        normalized_value:
+          type: string
+        participant_id:
+          format: int64
+          type: integer
+        scope_kind:
+          type: string
+        scope_value:
+          type: string
+        service_label:
+          type: string
+        service_slug:
+          type: string
+        type:
+          type: string
+        value:
+          type: string
+      required:
+        - participant_id
+        - type
+        - value
+        - display_value
+        - normalized_value
+        - service_slug
+        - service_label
+        - scope_kind
+        - scope_value
+      type: object
     ParticipantSearchHTTPResponse:
       properties:
         cache_revision:
@@ -11529,6 +11561,8 @@ components:
         display_name:
           type: string
         email:
+          type: string
+        normalized_value:
           type: string
         participant_id:
           format: int64
@@ -12886,6 +12920,8 @@ components:
       type: object
     PersonMergeDetail:
       properties:
+        labels:
+          $ref: "#/components/schemas/PersonMergeLabels"
         merge:
           $ref: "#/components/schemas/PersonMerge"
         participants:
@@ -12909,11 +12945,39 @@ components:
           type: array
           x-omitempty: false
       required:
+        - labels
         - merge
         - participants
         - rows
         - splits
         - review_candidates
+      type: object
+    PersonMergeLabels:
+      properties:
+        identifiers:
+          items:
+            $ref: "#/components/schemas/ParticipantIdentifierContext"
+          type: array
+        incomplete:
+          type: boolean
+        members:
+          items:
+            $ref: "#/components/schemas/PersonClusterMember"
+          type: array
+        participants:
+          items:
+            $ref: "#/components/schemas/PersonMergeParticipant"
+          type: array
+        profiles:
+          items:
+            $ref: "#/components/schemas/PersonMergeRecordedProfile"
+          type: array
+      required:
+        - profiles
+        - participants
+        - members
+        - identifiers
+        - incomplete
       type: object
     PersonMergeParticipant:
       properties:
@@ -12942,6 +13006,22 @@ components:
       required:
         - person
         - etag
+      type: object
+    PersonMergeRecordedProfile:
+      properties:
+        display_name:
+          type: string
+        id:
+          format: int64
+          type: integer
+        participant_ids:
+          items:
+            format: int64
+            type: integer
+          type: array
+      required:
+        - id
+        - participant_ids
       type: object
     PersonMergeRequiredError:
       properties:
@@ -13101,6 +13181,8 @@ components:
       type: object
     PersonMergeSummary:
       properties:
+        labels:
+          $ref: "#/components/schemas/PersonMergeLabels"
         merge:
           $ref: "#/components/schemas/PersonMerge"
         participant_count:
@@ -13121,6 +13203,7 @@ components:
           format: int64
           type: integer
       required:
+        - labels
         - merge
         - participant_count
         - row_count
@@ -17066,7 +17149,7 @@ components:
       type: apiKey
 info:
   title: msgvault API
-  version: 3.48.0
+  version: 3.49.0
 openapi: 3.0.3
 paths:
   /api/daemon/identity:

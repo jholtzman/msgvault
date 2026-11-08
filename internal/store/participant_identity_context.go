@@ -9,28 +9,31 @@ import (
 // ParticipantIdentityContext is the live-store detail omitted from the
 // analytical person cache. It is read only and scoped to the requested members.
 type ParticipantIdentityContext struct {
-	Members     []ParticipantIdentityMember
+	Members     []PersonClusterMember
 	Identifiers []ParticipantIdentifierContext
 	Links       []ParticipantLinkContext
 }
 
-// ParticipantIdentityMember describes a participant in the requested cluster.
-type ParticipantIdentityMember struct {
-	ParticipantID int64
-	DisplayName   string
-	Email         string
-	Phone         string
+// PersonClusterMember describes a participant in the requested cluster.
+type PersonClusterMember struct {
+	ParticipantID   int64  `json:"participant_id"`
+	DisplayName     string `json:"display_name,omitempty"`
+	Email           string `json:"email,omitempty"`
+	Phone           string `json:"phone,omitempty"`
+	NormalizedValue string `json:"normalized_value,omitempty"`
 }
 
 // ParticipantIdentifierContext gives an identifier its stored service and scope.
 type ParticipantIdentifierContext struct {
-	ParticipantID int64
-	Type          string
-	Value         string
-	ServiceSlug   string
-	ServiceLabel  string
-	ScopeKind     string
-	ScopeValue    string
+	ParticipantID   int64  `json:"participant_id"`
+	Type            string `json:"type"`
+	Value           string `json:"value"`
+	DisplayValue    string `json:"display_value"`
+	NormalizedValue string `json:"normalized_value"`
+	ServiceSlug     string `json:"service_slug"`
+	ServiceLabel    string `json:"service_label"`
+	ScopeKind       string `json:"scope_kind"`
+	ScopeValue      string `json:"scope_value"`
 }
 
 // ParticipantLinkContext records the origin of a link between cluster members.
@@ -47,6 +50,10 @@ type ParticipantLinkContext struct {
 func (s *Store) GetParticipantIdentityContext(
 	ctx context.Context, participantIDs []int64,
 ) (*ParticipantIdentityContext, error) {
+	return s.getParticipantIdentityContext(ctx, participantIDs, true)
+}
+
+func (s *Store) getParticipantIdentityContext(ctx context.Context, participantIDs []int64, links bool) (*ParticipantIdentityContext, error) {
 	result := &ParticipantIdentityContext{}
 	if len(participantIDs) == 0 {
 		return result, nil
@@ -78,15 +85,17 @@ func (s *Store) GetParticipantIdentityContext(
 		if err := s.readParticipantIdentifierContext(ctx, &result.Identifiers, in, args); err != nil {
 			return nil, err
 		}
-		if err := s.readParticipantLinkContext(ctx, &result.Links, wanted, in, args); err != nil {
-			return nil, err
+		if links {
+			if err := s.readParticipantLinkContext(ctx, &result.Links, wanted, in, args); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return result, nil
 }
 
 func (s *Store) readParticipantIdentityMembers(
-	ctx context.Context, dest *[]ParticipantIdentityMember, in string, args []any,
+	ctx context.Context, dest *[]PersonClusterMember, in string, args []any,
 ) error {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT id,
 		COALESCE(display_name, ''), COALESCE(email_address, ''), COALESCE(phone_number, '')
@@ -96,7 +105,7 @@ func (s *Store) readParticipantIdentityMembers(
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var member ParticipantIdentityMember
+		var member PersonClusterMember
 		if err := rows.Scan(&member.ParticipantID, &member.DisplayName, &member.Email, &member.Phone); err != nil {
 			return fmt.Errorf("scan participant identity member: %w", err)
 		}
@@ -109,9 +118,9 @@ func (s *Store) readParticipantIdentifierContext(
 	ctx context.Context, dest *[]ParticipantIdentifierContext, in string, args []any,
 ) error {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT pi.participant_id,
-		pi.identifier_type, pi.identifier_value, COALESCE(cs.slug, ''),
+		pi.identifier_type, pi.identifier_value, COALESCE(pi.display_value, ''), COALESCE(cs.slug, ''),
 		COALESCE(cs.display_label, ''), COALESCE(pi.scope_kind, ''),
-		COALESCE(pi.scope_value, '')
+		COALESCE(pi.scope_value, ''), COALESCE(cs.normalization, '')
 		FROM participant_identifiers pi
 		LEFT JOIN communication_services cs ON cs.id = pi.service_id
 		WHERE pi.participant_id IN (%s)
@@ -122,11 +131,17 @@ func (s *Store) readParticipantIdentifierContext(
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var identifier ParticipantIdentifierContext
-		if err := rows.Scan(&identifier.ParticipantID, &identifier.Type, &identifier.Value,
+		var strategy string
+		if err := rows.Scan(&identifier.ParticipantID, &identifier.Type, &identifier.Value, &identifier.DisplayValue,
 			&identifier.ServiceSlug, &identifier.ServiceLabel, &identifier.ScopeKind,
-			&identifier.ScopeValue); err != nil {
+			&identifier.ScopeValue, &strategy); err != nil {
 			return fmt.Errorf("scan participant identifier context: %w", err)
 		}
+		var service *CommunicationService
+		if strategy != "" {
+			service = &CommunicationService{Normalization: strategy}
+		}
+		identifier.NormalizedValue, _ = NormalizeServiceValue(service, ContactAddressKind(identifier.Type), identifier.Value)
 		*dest = append(*dest, identifier)
 	}
 	return rows.Err()

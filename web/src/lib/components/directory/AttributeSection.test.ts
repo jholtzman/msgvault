@@ -89,9 +89,9 @@ function renderSection(
 }
 
 describe('AttributeSection', () => {
-  it('keeps current imported provenance reachable while concealing sensitive values until reveal', async () => {
+  it('leads with the value and puts its provenance under it, keeping every timestamp in the tooltip', async () => {
     const sensitive = definition();
-    const current = personValue(sensitive, 19, { type: 'text', text: 'synthetic current secret' }, 0, { source: 'carddav_import', source_ref: 'source-card-7', actor: 'synthetic-importer', confidence: 0.8 });
+    const current = personValue(sensitive, 19, { type: 'text', text: 'synthetic current secret' }, 0, { source: 'carddav_import', source_ref: 'source-card-7', actor: 'synthetic-importer', confidence: 0.8, active_from: '2026-07-20T09:00:00Z' });
     const historical = personValue(sensitive, 17, { type: 'text', text: 'synthetic historical secret' }, 0, {
       active_until: '2026-07-01T00:00:00Z',
       superseded_at: '2026-07-01T00:00:00Z',
@@ -101,13 +101,15 @@ describe('AttributeSection', () => {
     expect(screen.getByRole('heading', { name: 'Private note' })).toBeDefined();
     expect(screen.getByText('1 earlier value')).toBeDefined();
     expect(screen.getAllByText('Hidden')).toHaveLength(2);
-    const currentRow = screen.getByText(/Reference: source-card-7/).closest('li')!;
-    expect(currentRow.textContent).toContain('Actor: synthetic-importer');
-    expect(currentRow.textContent).toContain('Confidence: 0.8');
-    expect(currentRow.textContent).toContain('Valid from:');
-    expect(screen.getByText('1 earlier value').closest('details')?.textContent).toContain('Valid until:');
+    const line = screen.getByText(/^From CardDAV contacts · since Jul (19|20)(, 2026)?$/);
+    const currentRow = line.closest('.detail-row')!;
+    // Reveal is the first row's text action, beside its value, not a control in the field's heading.
+    expect(currentRow.querySelector('.actions')!.textContent!.trim()).toBe('Reveal');
+    expect(screen.getByRole('heading', { name: 'Private note' }).querySelector('button')).toBeNull();
+    expect(currentRow.textContent).not.toMatch(/source-card-7|synthetic-importer|0\.8|Valid from|Created/);
+    expect(line.getAttribute('title')).toMatch(/^Recorded (Jul 31|Aug 1), 2026[^\n]*\nValid from Jul (19|20), 2026/);
+    expect(screen.getByText('1 earlier value').closest('details')!.querySelector('.description')!.getAttribute('title')).toMatch(/Valid until (Jun 30|Jul 1), 2026/);
     expect(document.body.innerHTML).not.toContain('synthetic current secret');
-    expect(screen.queryByText('synthetic historical secret')).toBeNull();
     expect(document.body.innerHTML).not.toContain('synthetic historical secret');
 
     const reveal = screen.getByRole('button', { name: 'Reveal Private note values' });
@@ -141,26 +143,30 @@ describe('AttributeSection', () => {
     const history = screen.getByText('1 earlier value').closest('details');
     expect(history).not.toBeNull();
     expect(history?.hasAttribute('open')).toBe(false);
-    const row = screen.getByText('Two').closest('li')!;
-    expect(row.textContent).toMatch(/Valid until: (Jul|Aug) \d{1,2}, 2026/);
+    const line = screen.getByText('Two').closest('.detail-row')!.querySelector('.description')!;
+    expect(line.textContent).toMatch(/^From a contact file · (Jul 31|Aug 1)(, 2026)?$/);
+    expect(line.getAttribute('title')).toMatch(/Valid until (Jul|Aug) \d{1,2}, 2026/);
   });
 
   it.each([
     { active_until: '2026-08-02T00:00:00Z' },
     { superseded_at: '2026-08-03T00:00:00Z' },
     { active_until: '2026-08-02T00:00:00Z', superseded_at: '2026-08-03T00:00:00Z' },
-  ])('shows each closed attribute interval once in provenance: %j', interval => {
+  ])('keeps each closed attribute interval once, in the tooltip: %j', interval => {
     const field = definition({ is_sensitive: false });
-    const historical = personValue(field, 29, { type: 'text', text: 'Earlier note' }, 0, interval);
+    const historical = personValue(field, 29, { type: 'text', text: 'Earlier note' }, 0, { ...interval, actor: 'user', source_ref: 'note-29', confidence: 900 });
     renderSection(vi.fn(), [{ definition: field, current: [], history: [historical] }]);
 
-    const row = screen.getByText('Earlier note').closest('li')!;
+    const row = screen.getByText('Earlier note').closest('.detail-row')!;
     expect(row.closest('details')).not.toBeNull();
-    const metadata = row.querySelector('.meta')!.textContent!.trim();
-    expect(metadata.split(' · ').map(part => part.split(': ')[0])).toEqual([
-      'You', 'Actor', 'Valid from', ...(interval.active_until ? ['Valid until'] : []), ...(interval.superseded_at ? ['Superseded'] : []), 'Created',
+    const line = row.querySelector('.description')!;
+    expect(line.textContent).toMatch(/^You · (Jul 31|Aug 1)/);
+    const title = line.getAttribute('title')!;
+    expect(title.split('\n').map(entry => entry.startsWith('Valid') ? entry.split(' ').slice(0, 2).join(' ') : entry.split(' ')[0])).toEqual([
+      'Recorded', ...(interval.active_until ? ['Valid until'] : []), ...(interval.superseded_at ? ['Replaced'] : []), 'Actor:', 'Reference:', 'Confidence:',
     ]);
-    if (interval.active_until) expect(metadata).toMatch(/Valid until: (Aug 1|Aug 2), 2026/);
-    if (interval.superseded_at) expect(metadata).toMatch(/Superseded: (Aug 2|Aug 3), 2026/);
+    expect(title).toContain('Actor: you\nReference: note-29\nConfidence: 900');
+    if (interval.active_until) expect(title).toMatch(/Valid until (Aug 1|Aug 2), 2026/);
+    if (interval.superseded_at) expect(title).toMatch(/Replaced (Aug 2|Aug 3), 2026/);
   });
 });

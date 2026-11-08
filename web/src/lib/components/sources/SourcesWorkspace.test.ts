@@ -528,30 +528,102 @@ describe('SourcesWorkspace', () => {
   it('opens source setup from the header of a populated workspace', async () => {
     render(SourcesWorkspace, { client: createCaptureClient(api([source()]), []) });
     await screen.findByRole('table', { name: 'Sources' });
-    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
-    expect(within(screen.getByRole('dialog', { name: 'Add source' })).getByText('msgvault add-account user@example.com')).toBeDefined();
+    await fireEvent.click(screen.getByRole('button', { name: 'Add source…' }));
+    expect(within(screen.getByRole('dialog', { name: 'Add source' })).getByRole('list', { name: 'Source kinds' })).toBeDefined();
   });
 
-  it('offers one source setup action after an empty workspace loads', async () => {
+  it('opens source setup and sync history from an empty workspace', async () => {
     const onOpenOperations = vi.fn();
-    let release!: () => void;
-    const pending = new Promise<void>(resolve => { release = resolve; });
-    const fetchFn = api([]);
-    render(SourcesWorkspace, { client: createCaptureClient(async (...args) => { await pending; return fetchFn(...args); }, []), onOpenOperations });
-    try {
-      await screen.findByText('Loading…');
-      expect(screen.queryByRole('button', { name: 'Add source' })).toBeNull();
-    } finally {
-      release();
-    }
-    await screen.findByText('No sources yet');
-    expect(screen.getByText('Add an account or import an export to start your archive.')).toBeDefined();
-    expect(screen.getAllByRole('button', { name: 'Add source' })).toHaveLength(1);
-    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
-    expect(within(screen.getByRole('dialog', { name: 'Add source' })).getByText('msgvault add-account user@example.com')).toBeDefined();
-    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add source' })).getByRole('button', { name: 'Close' }));
+    render(SourcesWorkspace, { client: createCaptureClient(api([]), []), onOpenOperations });
+    expect(await screen.findByText('Add your first source')).toBeDefined();
+    // Each kind says only what its name doesn't.
+    expect(await screen.findByRole('button', { name: 'Microsoft Outlook.com, Hotmail, or Microsoft 365' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Contacts Google, Microsoft, or CardDAV address books · opens Settings' })).toBeDefined();
+    expect(screen.getByText(/^More sources: Slack, Teams, WhatsApp, MBOX…/)).toBeDefined();
+    expect(screen.getByRole('link', { name: 'All sources' })).toBeDefined();
+    await fireEvent.click(await screen.findByRole('button', { name: /^Gmail Includes/ }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add Gmail' }));
+    const email = dialog.getByLabelText('Email address');
+    expect(dialog.queryByText(/Run this in a terminal/)).toBeNull();
+    await fireEvent.input(email, { target: { value: 'you@gmail.com' } });
+    expect(dialog.getByText('Run this command in a terminal where msgvault is installed.')).toBeDefined();
+    expect(dialog.getAllByRole('button', { name: 'Copy msgvault add-account you@gmail.com' })).toHaveLength(1);
+    await fireEvent.click(dialog.getByRole('button', { name: 'Back to Add source' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getAllByRole('button', { name: /^Gmail Includes/ })).toHaveLength(1);
+    await fireEvent.click(screen.getByRole('button', { name: /^Gmail Includes/ }));
+    await fireEvent.input(within(screen.getByRole('dialog', { name: 'Add Gmail' })).getByLabelText('Email address'), { target: { value: 'garden user@example.org' } });
+    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add Gmail' })).getByRole('button', { name: 'Done' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Sync history' }));
     expect(onOpenOperations).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a first-run step and its filled field through a status poll that finds the new source', async () => {
+    let reads = 0;
+    render(SourcesWorkspace, { client: createCaptureClient(api([], url => {
+      if (url.pathname.endsWith('/sources/status') && ++reads > 1) return Response.json({ sources: [source()] });
+      return undefined;
+    }), []) });
+    await fireEvent.click(await screen.findByRole('button', { name: /^Gmail Includes/ }));
+    const email = within(screen.getByRole('dialog', { name: 'Add Gmail' })).getByLabelText('Email address');
+    await fireEvent.input(email, { target: { value: 'you@gmail.com' } });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(await screen.findByRole('table', { name: 'Sources' })).toBeDefined();
+    expect(screen.queryByText('Add your first source')).toBeNull();
+    expect(within(screen.getByRole('dialog', { name: 'Add Gmail' })).getByLabelText('Email address')).toBe(email);
+    expect((email as HTMLInputElement).value).toBe('you@gmail.com');
+  });
+
+  it('clears copy feedback when the command changes', async () => {
+    const writeText = vi.fn(async () => undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      render(SourcesWorkspace, { client: createCaptureClient(api([]), []) });
+      await screen.findByText('Add your first source');
+      await fireEvent.click(await screen.findByRole('button', { name: /^Gmail Includes/ }));
+      const dialog = within(screen.getByRole('dialog', { name: 'Add Gmail' }));
+      const email = dialog.getByLabelText('Email address');
+      await fireEvent.input(email, { target: { value: 'one@example.com' } });
+      await fireEvent.click(dialog.getByRole('button', { name: 'Copy msgvault add-account one@example.com' }));
+      await waitFor(() => expect(dialog.getByRole('button', { name: 'Copied' }).textContent?.trim()).toBe('Copied'));
+      expect(writeText).toHaveBeenCalledWith('msgvault add-account one@example.com');
+      await fireEvent.input(email, { target: { value: 'two@example.com' } });
+      expect(dialog.getByRole('button', { name: 'Copy msgvault add-account two@example.com' })).toBeDefined();
+      await fireEvent.click(dialog.getByRole('button', { name: 'Copy msgvault add-account two@example.com' }));
+      await waitFor(() => expect(writeText).toHaveBeenLastCalledWith('msgvault add-account two@example.com'));
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard });
+    }
+  });
+
+  it('shows the IMAP password prompt and separate shell commands', async () => {
+    render(SourcesWorkspace, { client: createCaptureClient(api([]), []) });
+    await screen.findByText('Add your first source');
+    await fireEvent.click(await screen.findByRole('button', { name: /^IMAP mailbox Any/ }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add IMAP mailbox' }));
+    expect(dialog.getByText('The command asks for your password.')).toBeDefined();
+    await fireEvent.input(dialog.getByLabelText('Server'), { target: { value: 'imap.example.com' } });
+    await fireEvent.input(dialog.getByLabelText('Username'), { target: { value: '~/reader' } });
+    expect(dialog.getByText('The command asks for your password.')).toBeDefined();
+    expect(dialog.getByRole('button', { name: /^Copy / }).textContent?.trim()).toBe('Copy');
+    expect(dialog.getAllByRole('listitem').map(item => item.textContent)).toEqual(['Run this command in a terminal where msgvault is installed.', 'Run the first-sync command it prints.', 'Press Done.']);
+    expect(dialog.getByRole('link', { name: 'Setup guide' })).toBeDefined();
+    const posix = dialog.getByRole('button', { name: /^Copy / }).getAttribute('aria-label');
+    await fireEvent.click(dialog.getByRole('radio', { name: 'Windows' }));
+    expect(dialog.getByText(/Start Command Prompt with/)).toBeDefined();
+    const copies = dialog.getAllByRole('button', { name: /^Copy / });
+    expect(copies).toHaveLength(1);
+    expect(copies[0].getAttribute('aria-label')).not.toBe(posix);
+  });
+
+  it('opens existing CardDAV setup and closes the picker', async () => {
+    const onOpenSettings = vi.fn();
+    render(SourcesWorkspace, { client: createCaptureClient(api([]), []), onOpenSettings });
+    await screen.findByText('Add your first source');
+    await fireEvent.click(await screen.findByRole('button', { name: /^Contacts Google/ }));
+    expect(onOpenSettings).toHaveBeenCalledWith('carddav');
+    expect(screen.queryByRole('dialog', { name: 'Add source' })).toBeNull();
   });
 
   it('keeps polling through idle races until the accepted run completes', async () => {
@@ -770,7 +842,7 @@ describe('SourcesWorkspace', () => {
     await tick();
     await Promise.all(requests);
     expect(events).toEqual([]);
-    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Add source…' }));
     expect(screen.getByRole('dialog', { name: 'Add source' })).toBeDefined();
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add source' })).getByRole('button', { name: 'Close' }));
 
@@ -1128,7 +1200,7 @@ it.each(['error', 'timeout'])('recovers a contacts-only load %s without claiming
     if (failure === 'timeout') expect(within(alert).queryByText('Details')).toBeNull();
     if (failure === 'error') expect(alert.textContent).toContain('Contacts upstream unavailable');
     expect(screen.queryByText('No sources yet')).toBeNull();
-    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Add source…' }));
     expect(screen.getByRole('dialog', { name: 'Add source' })).toBeDefined();
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add source' })).getByRole('button', { name: 'Close' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
