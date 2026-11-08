@@ -86,6 +86,26 @@ describe('PersonRecordActions', () => {
     expect((await screen.findByRole('menuitemcheckbox', { name: /Keep this profile updated/ })).getAttribute('aria-checked')).toBe('true');
   });
 
+  it('announces a failed save after the menu closes', async () => {
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const onAnnounce = vi.fn();
+    renderActions(async input => {
+      const request = input as Request;
+      if (request.method !== 'PUT') return Response.json({ person_id: 7, tracked: false, tracked_at: null });
+      await held;
+      return Response.json({ message: 'Synthetic save unavailable' }, { status: 503 });
+    }, undefined, undefined, onAnnounce);
+    await fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    const item = await screen.findByRole('menuitemcheckbox', { name: /Keep this profile updated/ });
+    await waitFor(() => expect(item.textContent?.trim()).toBe('Keep this profile updated'));
+    await fireEvent.click(item);
+    await fireEvent.keyDown(item, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    release();
+    await waitFor(() => expect(onAnnounce).toHaveBeenCalledWith("Couldn't save profile updates."));
+  });
+
   it('says a failed save as Couldn\'t save, and Retry saves again', async () => {
     let tracked = false, writes = 0;
     renderActions(vi.fn<typeof fetch>(async input => {

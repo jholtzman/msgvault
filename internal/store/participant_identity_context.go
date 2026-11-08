@@ -109,16 +109,29 @@ func (s *Store) readParticipantIdentityMembers(
 		if err := rows.Scan(&member.ParticipantID, &member.DisplayName, &member.Email, &member.Phone); err != nil {
 			return fmt.Errorf("scan participant identity member: %w", err)
 		}
-		*dest = append(*dest, member)
+		*dest = append(*dest, normalizedClusterMember(member))
 	}
 	return rows.Err()
+}
+
+// normalizedClusterMember sets the canonical email, else phone, that History
+// and people detail both show for the member.
+func normalizedClusterMember(member PersonClusterMember) PersonClusterMember {
+	value, kind := member.Email, ContactAddressEmail
+	if value == "" {
+		value, kind = member.Phone, ContactAddressPhone
+	}
+	if value != "" {
+		member.NormalizedValue, _ = NormalizeServiceValue(nil, kind, value)
+	}
+	return member
 }
 
 func (s *Store) readParticipantIdentifierContext(
 	ctx context.Context, dest *[]ParticipantIdentifierContext, in string, args []any,
 ) error {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT pi.participant_id,
-		pi.identifier_type, pi.identifier_value, COALESCE(pi.display_value, ''), COALESCE(cs.slug, ''),
+		pi.identifier_type, pi.identifier_value, COALESCE(pi.display_value, ''), COALESCE(cs.slug, CASE WHEN pi.identifier_type IN ('email', 'phone') THEN pi.identifier_type ELSE '' END),
 		COALESCE(cs.display_label, ''), COALESCE(pi.scope_kind, ''),
 		COALESCE(pi.scope_value, ''), COALESCE(cs.normalization, '')
 		FROM participant_identifiers pi

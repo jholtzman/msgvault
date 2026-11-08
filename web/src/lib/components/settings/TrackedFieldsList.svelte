@@ -12,14 +12,16 @@
   const controller = new PersonTrackingController(untrack(() => client));
   let labels = $state(new Map<string, string>());
   let sensitiveOpen = $state(false);
+  let namesError = $state<string | null>(null);
   const namesAbort = new AbortController();
-  onMount(() => {
-    void controller.retryCatalog(false);
-    // Without the field names, a field reads as its slug in words.
+  // Without the field names, a field reads as its slug in words; the fields already listed stay while Retry asks again.
+  function loadNames(): void {
+    namesError = null;
     void listAttributeDefinitions({ object_type: 'person' }, { ...client, signal: namesAbort.signal })
-      .then(response => { if (!namesAbort.signal.aborted && response.data) labels = new Map((response.data.definitions ?? []).map(definition => [definition.slug, definition.label])); })
-      .catch(() => undefined);
-  });
+      .then(({ data, response }) => { if (namesAbort.signal.aborted) return; if (data) labels = new Map((data.definitions ?? []).map(definition => [definition.slug, definition.label])); else namesError = `The server answered ${response.status}.`; })
+      .catch((cause: unknown) => { if (!namesAbort.signal.aborted) namesError = cause instanceof Error && cause.message ? cause.message : "Couldn't reach msgvault."; });
+  }
+  onMount(() => { void controller.retryCatalog(false); loadNames(); });
   onDestroy(() => { namesAbort.abort(); controller.destroy(); });
 
   function label(target: PersonTrackingTarget): string {
@@ -35,6 +37,7 @@
   <ul>{#each controller.targets.filter(target => !target.sensitive) as target (target.key)}<li>{label(target)}</li>{/each}</ul>
   {#if !controller.catalogLoading && !controller.catalogError && !controller.targets.length}<EmptyLine message="No fields yet" />{/if}
   {#if controller.catalogError}<InlineNotice message="Couldn't load the fields kept updated." actionLabel="Retry" onaction={() => void controller.retryCatalog(sensitiveOpen)} details={controller.catalogError} />{/if}
+  {#if namesError}<InlineNotice message="Couldn't load the field names." actionLabel="Retry" onaction={loadNames} details={namesError} />{/if}
   <Disclosure variant="plain" class="fold" title="Show sensitive fields" bind:open={sensitiveOpen} ontoggle={(open) => { if (open && !controller.catalogIncludesSensitive) void controller.retryCatalog(true); }}>
     {#if controller.catalogIncludesSensitive && !sensitive.length}<EmptyLine message="No sensitive fields" />{/if}
     <ul>{#each sensitive as target (target.key)}<li>{label(target)}</li>{/each}</ul>

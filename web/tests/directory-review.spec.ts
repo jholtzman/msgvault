@@ -119,3 +119,19 @@ test('address actions align with the first text line while details opens', async
     for (const center of positions.actions) expect(Math.abs(center - positions.text)).toBeLessThanOrEqual(2);
   }
 });
+
+for (const width of [1440, 390]) {
+  test(`first source choices align with their heading at ${width}`, async ({ page }) => {
+    await installDirectoryReviewArchive(page);
+    await page.route('**/api/v1/sources/status', route => route.fulfill({ json: { sources: [] } }));
+    await page.route('**/api/v1/carddav/connections', route => route.fulfill({ json: { connections: [] } }));
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto('/?workspace=sources');
+    const heading = page.getByRole('heading', { name: 'Add your first source', exact: true });
+    await expect(heading).toBeVisible();
+    const label = page.getByRole('button', { name: /^Gmail Includes/ }).getByText('Gmail', { exact: true });
+    const titleBounds = await heading.boundingBox();
+    const labelBounds = await label.boundingBox();
+    expect(Math.abs(labelBounds!.x - titleBounds!.x)).toBeLessThanOrEqual(1);
+  });
+}

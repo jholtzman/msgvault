@@ -470,3 +470,38 @@ func TestDaemonCLIArgsFromCobraForwardsLoggingButSkipsOtherRootPersistentFlags(t
 
 	require.NoError(root.Execute(), "execute")
 }
+
+func TestAddSourceCommandPreservesPositionalAddressThroughDaemon(t *testing.T) {
+	for _, provider := range []struct {
+		name    string
+		command func() *cobra.Command
+		local   func() *cobra.Command
+		grant   bool
+	}{
+		{"gmail", newAddAccountCmd, newAddAccountCmd, true},
+		{"microsoft", newAddO365Cmd, newAddO365LocalCmd, false},
+	} {
+		t.Run(provider.name, func(t *testing.T) {
+			frontend := provider.command()
+			require.NoError(t, frontend.ParseFlags([]string{"--", "-sender@example.org"}))
+			forwarded, err := daemonCLIArgsFromCobra(frontend, frontend.Flags().Args())
+			require.NoError(t, err)
+			adapter := &storeAPIAdapter{}
+			err = adapter.runCLICommandWithRunner(t.Context(), api.CLIRunRequest{Args: forwarded, GrantDecided: provider.grant}, nil,
+				func(_ context.Context, args []string, _ map[string]string, _ string, _ func(string, string) error) error {
+					child := provider.local()
+					if err := child.ParseFlags(args[1:]); err != nil {
+						return err
+					}
+					assert.Equal(t, []string{"-sender@example.org"}, child.Flags().Args())
+					if provider.grant {
+						grant, err := child.Flags().GetBool(addAccountGrantDecidedFlag)
+						require.NoError(t, err)
+						assert.True(t, grant, "daemon-owned grant flag stays outside the positional boundary")
+					}
+					return nil
+				})
+			require.NoError(t, err)
+		})
+	}
+}

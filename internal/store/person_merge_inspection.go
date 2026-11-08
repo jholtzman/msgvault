@@ -601,21 +601,11 @@ func (s *Store) loadPersonMergeIdentities(ctx context.Context, labels []*PersonM
 		}
 		for _, member := range identities.Members {
 			if wanted[member.ParticipantID] {
-				value, kind := member.Email, ContactAddressEmail
-				if value == "" {
-					value, kind = member.Phone, ContactAddressPhone
-				}
-				if value != "" {
-					member.NormalizedValue, _ = NormalizeServiceValue(nil, kind, value)
-				}
 				label.Members = append(label.Members, member)
 			}
 		}
 		for _, identifier := range identities.Identifiers {
 			if wanted[identifier.ParticipantID] {
-				if identifier.ServiceSlug == "" && (identifier.Type == "email" || identifier.Type == "phone") {
-					identifier.ServiceSlug = identifier.Type
-				}
 				label.Identifiers = append(label.Identifiers, identifier)
 			}
 		}

@@ -34,6 +34,25 @@ describe('Fields kept updated', () => {
     await waitFor(() => expect(sensitive.closest('details')?.open).toBe(false));
   });
 
+  it('keeps loaded fields and retries unavailable field names', async () => {
+    let names = 0, targets = 0;
+    const client = createAPIClient(async input => {
+      const url = new URL((input as Request).url);
+      if (url.pathname.endsWith('/attribute-definitions')) {
+        if (++names === 1) return Response.json({ message: 'Synthetic names unavailable' }, { status: 503 });
+        return Response.json({ definitions: [{ slug: 'rr_27', label: 'Preferred greenery' }] });
+      }
+      targets++;
+      return Response.json({ targets: [{ kind: 'attribute', key: 'field:rr_27', slug: 'rr_27', description: 'A plant', sensitive: false }] });
+    });
+    render(TrackedFieldsList, { client });
+    expect(await screen.findByText('Rr 27')).toBeDefined();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Preferred greenery')).toBeDefined();
+    expect(targets).toBe(1);
+    expect(names).toBe(2);
+  });
+
   it.each([false, true])('lists Work and a custom Employment field, sensitive=%s', async sensitive => {
     const client = createAPIClient(async input => {
       const url = new URL((input as Request).url);

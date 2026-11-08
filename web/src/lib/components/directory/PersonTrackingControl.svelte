@@ -13,10 +13,11 @@
 
   let { controller, onSetUp, onAnnounce = () => undefined }: Props = $props();
 
+  // A save clears the announcement and sets it only when the change lands, so a failed save says so instead.
   async function changeTracking(desired: boolean | null): Promise<void> {
     const context = controller.contextToken;
     const outcome = desired === null ? await controller.retrySave() : await controller.setTracked(desired);
-    if (controller.isContextCurrent(context) && (outcome.kind === 'confirmed' || outcome.kind === 'reconciled') && controller.announcement) onAnnounce(controller.announcement);
+    if (controller.isContextCurrent(context) && (outcome.kind === 'confirmed' || outcome.kind === 'reconciled' || outcome.kind === 'error')) onAnnounce(controller.announcement ?? "Couldn't save profile updates.");
   }
   // The switch shows on or off; the line adds only since when.
   const status = $derived(controller.tracking?.tracked && controller.tracking.tracked_at ? `Since ${formatShortDate(controller.tracking.tracked_at)}` : '');

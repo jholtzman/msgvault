@@ -53,7 +53,6 @@
   h2 { margin: 0; font-size: var(--type-title-size); line-height: var(--type-title-line); }
   p { margin: 0; color: var(--text-secondary); font-size: var(--type-meta-size); line-height: var(--type-meta-line); }
   /* "All sources" is one link, so it wraps whole on a phone. */
-  section .choices :global(.results) { margin-inline: 0; }
   a:hover { text-decoration: underline; }
   a { text-decoration: none; color: var(--link-ink); white-space: nowrap; }
 </style>

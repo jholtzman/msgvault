@@ -35,9 +35,9 @@ func TestGetParticipantIdentityContext(t *testing.T) {
 	details, err := st.GetParticipantIdentityContext(ctx, []int64{root, alias, phone, alias, 0, -1})
 	require.NoError(err)
 	assert.ElementsMatch([]store.PersonClusterMember{
-		{ParticipantID: root, DisplayName: "Root Example", Email: "root@example.com"},
+		{ParticipantID: root, DisplayName: "Root Example", Email: "root@example.com", NormalizedValue: "root@example.com"},
 		{ParticipantID: alias, DisplayName: "Alias Example"},
-		{ParticipantID: phone, DisplayName: "Phone Example", Phone: "+15550100001"},
+		{ParticipantID: phone, DisplayName: "Phone Example", Phone: "+15550100001", NormalizedValue: "+15550100001"},
 	}, details.Members)
 	assert.Contains(details.Identifiers, store.ParticipantIdentifierContext{
 		ParticipantID: alias, Type: "beeper", Value: key, DisplayValue: key,
@@ -89,4 +89,15 @@ func TestGetParticipantIdentityContextBatchesAndExcludesOutsideLinks(t *testing.
 		{ParticipantA: ids[0], ParticipantB: ids[301], OriginKind: "manual"},
 		{ParticipantA: ids[300], ParticipantB: ids[301], OriginKind: "manual"},
 	}, details.Links)
+}
+
+func TestGetParticipantIdentityContextClassifiesUnscopedPhone(t *testing.T) {
+	st := testutil.NewTestStore(t)
+	id, err := st.EnsurePhoneParticipantContext(t.Context(), "+16045550103", "Phone Example")
+	require.NoError(t, err)
+	details, err := st.GetParticipantIdentityContext(t.Context(), []int64{id})
+	require.NoError(t, err)
+	require.Len(t, details.Identifiers, 1)
+	assert.Equal(t, "phone", details.Identifiers[0].ServiceSlug)
+	assert.Equal(t, "+16045550103", details.Identifiers[0].NormalizedValue)
 }
