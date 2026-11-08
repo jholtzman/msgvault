@@ -2439,8 +2439,9 @@ See [Text Messages](/docs/usage/text-messages/) for usage examples.
 
 ## import-google-messages-web
 
-Import a folder of conversations captured from Google Messages for web, and
-delete each capture file once its messages are stored.
+Import a folder of conversations captured from Google Messages for web, with
+their images, and delete each capture file and its images once its messages
+are stored.
 
 ```bash
 msgvault import-google-messages-web <folder> --owner-phone <your-number>

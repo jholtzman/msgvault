@@ -1,7 +1,6 @@
 package gmessagesweb
 
 import (
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"os"
 	"path/filepath"
@@ -30,7 +29,29 @@ func TestParseRejectsInvalidLines(t *testing.T) {
 		{"seconds in sent_at", func(l *Line) { l.SentAt = "2026-03-14T18:22:05Z" }, "sent_at is not a UTC minute"},
 		{"offset in sent_at", func(l *Line) { l.SentAt = "2026-03-14T18:22:00-07:00" }, "sent_at is not a UTC minute"},
 		{"other precision", func(l *Line) { l.SentAtPrecision = "second" }, "sent_at_precision is not"},
-		{"attachments present", func(l *Line) { l.Attachments = []jsontext.Value{jsontext.Value(`{}`)} }, "attachments are not supported"},
+		{"attachment in another folder", func(l *Line) { l.Attachments = []Attachment{image("../a-1.png")} }, "attachment 0: file is not a plain file name"},
+		{"hidden attachment", func(l *Line) { l.Attachments = []Attachment{image(".a-1.png")} }, "attachment 0: file is not a plain file name"},
+		{"attachment named as a capture file", func(l *Line) { l.Attachments = []Attachment{image("b.jsonl")} }, "attachment 0: file is not a plain file name"},
+		{"attachment of another type", func(l *Line) {
+			a := image("a-1.svg")
+			a.MIMEType = "image/svg+xml"
+			l.Attachments = []Attachment{a}
+		}, "attachment 0: mime_type is not a supported image type"},
+		{"empty attachment", func(l *Line) {
+			a := image("a-1.png")
+			a.Size = 0
+			l.Attachments = []Attachment{a}
+		}, "attachment 0: size is not between"},
+		{"attachment without hash", func(l *Line) {
+			a := image("a-1.png")
+			a.SHA256 = ""
+			l.Attachments = []Attachment{a}
+		}, "attachment 0: sha256 is not"},
+		{"too many attachments", func(l *Line) {
+			for range MaxAttachments + 1 {
+				l.Attachments = append(l.Attachments, image("a-1.png"))
+			}
+		}, "attachments has more than"},
 		{"control character in page id", func(l *Line) { l.PageMessageID = "1\n2" }, "page_message_id is not printable"},
 		{"local captured_at", func(l *Line) { l.CapturedAt = "2026-03-14T18:25:31+01:00" }, "captured_at is not a UTC time"},
 	}
@@ -99,4 +120,8 @@ func TestDiscoverFilesListsFinishedCaptureFilesInNameOrder(t *testing.T) {
 	files, err := DiscoverFiles(dir)
 	require.NoError(err, "DiscoverFiles")
 	assert.Equal([]string{filepath.Join(dir, "a.jsonl"), filepath.Join(dir, "b.jsonl")}, files)
+}
+
+func image(file string) Attachment {
+	return Attachment{File: file, MIMEType: "image/png", Size: 10, SHA256: hashOf("image")}
 }

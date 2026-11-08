@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.kenn.io/msgvault/internal/export"
+	"go.kenn.io/msgvault/internal/mime"
 	"go.kenn.io/msgvault/internal/store"
 )
 
@@ -25,10 +27,10 @@ func NewImporter(st *store.Store, opts ImportOptions) *Importer {
 // ImportDir imports every capture file in dir as one sync run of the owner's
 // source.
 //
-// A file is deleted once all of its messages are stored. A file that fails
-// to parse or store stays where it is, so the next run retries it, and the
-// run goes on to the remaining files. The run then fails, naming each failed
-// file.
+// A file and the images it lists are deleted once all of its messages are
+// stored. A file that fails to parse or store stays where it is with its
+// images, so the next run retries it, and the run goes on to the remaining
+// files. The run then fails, naming each failed file.
 func (i *Importer) ImportDir(ctx context.Context, dir string) (ImportSummary, error) {
 	if !e164.MatchString(strings.TrimSpace(i.opts.OwnerPhone)) {
 		return ImportSummary{}, errors.New("owner phone in E.164 format is required for google-messages-web imports")
@@ -99,6 +101,21 @@ func (i *Importer) importFile(ctx context.Context, sourceID int64, path string, 
 	if err != nil {
 		return err
 	}
+	var images []string
+	for _, msg := range messages {
+		for _, a := range msg.Attachments {
+			images = append(images, a.File)
+		}
+	}
+	if len(images) > 0 && strings.TrimSpace(i.opts.AttachmentsDir) == "" {
+		return errors.New("file lists images, and no attachments folder is configured")
+	}
+	// Every image is read and checked before any message is stored, as
+	// every line is parsed first.
+	dir := filepath.Dir(path)
+	if err := LoadAttachments(dir, messages); err != nil {
+		return err
+	}
 	for n, msg := range messages {
 		id, err := i.importMessage(ctx, sourceID, msg)
 		if id != 0 {
@@ -108,9 +125,20 @@ func (i *Importer) importFile(ctx context.Context, sourceID int64, path string, 
 			return &LineError{Line: n + 1, Err: err}
 		}
 		summary.MessagesImported++
+		summary.ImagesImported += len(msg.Attachments)
 	}
+	// The capture file goes first: an image left behind by a failure below
+	// is never read again, while a capture file whose images were gone
+	// would fail on every later run.
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("remove imported file: %w", err)
+	}
+	for _, name := range images {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("failed to remove imported Google Messages for web image",
+				"file", name,
+				"error", err)
+		}
 	}
 	return nil
 }
@@ -164,9 +192,11 @@ func (i *Importer) importMessage(ctx context.Context, sourceID int64, msg Messag
 		IsFromMe:        fromMe,
 		// The page shows sent messages and received ones alike; the capture
 		// file does not mark a message that failed to send.
-		IsSent:       sql.NullBool{Bool: true, Valid: true},
-		Snippet:      sql.NullString{String: text, Valid: text != ""},
-		SizeEstimate: int64(len(text)),
+		IsSent:          sql.NullBool{Bool: true, Valid: true},
+		Snippet:         sql.NullString{String: text, Valid: text != ""},
+		SizeEstimate:    int64(len(text)) + attachmentBytes(msg),
+		HasAttachments:  len(msg.Attachments) > 0,
+		AttachmentCount: len(msg.Attachments),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("upsert message: %w", err)
@@ -177,6 +207,9 @@ func (i *Importer) importMessage(ctx context.Context, sourceID int64, msg Messag
 		if err := i.store.UpsertMessageBodyContext(ctx, msgID, sql.NullString{String: text, Valid: true}, sql.NullString{}); err != nil {
 			return msgID, fmt.Errorf("upsert body: %w", err)
 		}
+	}
+	if err := i.storeAttachments(ctx, msgID, msg); err != nil {
+		return msgID, err
 	}
 	if err := i.store.UpsertMessageRawWithFormatContext(ctx, msgID, msg.Raw, RawFormat); err != nil {
 		return msgID, fmt.Errorf("upsert raw record: %w", err)
@@ -195,4 +228,45 @@ func (i *Importer) importMessage(ctx context.Context, sourceID int64, msg Messag
 			"error", err)
 	}
 	return msgID, nil
+}
+
+// storeAttachments puts each image in the attachment store and records it
+// on the message. The capture file is deleted after the import, so each
+// image is written durably before its record.
+func (i *Importer) storeAttachments(ctx context.Context, msgID int64, msg Message) error {
+	for n, a := range msg.Attachments {
+		filename := fmt.Sprintf("image-%d.%s", n+1, imageExtensions[a.MIMEType])
+		receipt, err := export.StoreAttachmentFileDurable(ctx, i.opts.AttachmentsDir, &mime.Attachment{
+			Filename:    filename,
+			ContentType: a.MIMEType,
+			Size:        len(msg.Content[n]),
+			ContentHash: a.SHA256,
+			Content:     msg.Content[n],
+		})
+		if err != nil {
+			return fmt.Errorf("attachment %d: store image: %w", n, err)
+		}
+		if err := i.store.UpsertAttachmentRecord(ctx, msgID, store.AttachmentWrite{
+			Filename:      filename,
+			MIMEType:      a.MIMEType,
+			StoragePath:   receipt.StoragePath,
+			ContentHash:   receipt.ContentHash,
+			Size:          a.Size,
+			MediaType:     "image",
+			Role:          store.AttachmentRoleStandalone,
+			RoleSource:    store.AttachmentRoleSourceImporterSemantics,
+			SourcePartKey: fmt.Sprintf("google-messages-web:image:%d", n),
+		}); err != nil {
+			return fmt.Errorf("attachment %d: upsert attachment: %w", n, err)
+		}
+	}
+	return nil
+}
+
+func attachmentBytes(msg Message) int64 {
+	var n int64
+	for _, a := range msg.Attachments {
+		n += a.Size
+	}
+	return n
 }

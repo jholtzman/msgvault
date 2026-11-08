@@ -8,8 +8,8 @@ All notable changes to msgvault, grouped by release.
 
 ## Unreleased
 
-- Import conversations captured from Google Messages for web with
-  `msgvault import-google-messages-web`, or on a schedule with
+- Import conversations captured from Google Messages for web, images
+  included, with `msgvault import-google-messages-web`, or on a schedule with
   `[[google_messages_web.sources]]`. See
   [Text Messages](usage/text-messages.md#import-google-messages-web).
 - Plaud syncs wait longer and slow down when Plaud reports too many requests,

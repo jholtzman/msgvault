@@ -3,7 +3,6 @@ package gmessagesweb
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"os"
 	"path/filepath"
@@ -39,7 +38,7 @@ func line(key string, participants []string, sender, sentAt, text string) Line {
 		SentAt:          sentAt,
 		SentAtPrecision: SentAtPrecisionMinute,
 		Text:            text,
-		Attachments:     []jsontext.Value{},
+		Attachments:     []Attachment{},
 		CapturedAt:      "2026-03-14T18:25:31Z",
 		PageMessageID:   "101",
 	}
@@ -77,7 +76,7 @@ func groupLines() []Line {
 }
 
 func newImporter(f *storetest.Fixture) *Importer {
-	return NewImporter(f.Store, ImportOptions{OwnerPhone: ownerPhone})
+	return NewImporter(f.Store, ImportOptions{OwnerPhone: ownerPhone, AttachmentsDir: f.T.TempDir()})
 }
 
 func TestImportDirStoresMessagesAndDeletesFiles(t *testing.T) {
@@ -249,4 +248,115 @@ func assertFolderEmpty(t *testing.T, dir string) {
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err, "read folder")
 	assert.Empty(t, entries, "capture folder")
+}
+
+// A made-up PNG: the importer checks the first bytes only.
+var pngImage = []byte("\x89PNG\r\n\x1a\nmade-up image content")
+
+// withImage lists an image file in dir on l, writing the file.
+func withImage(t *testing.T, dir, name string, content []byte, l Line) Line {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), content, 0o600), "write image")
+	l.Attachments = append(l.Attachments, Attachment{
+		File: name, MIMEType: "image/png", Size: int64(len(content)), SHA256: hashOf(string(content)),
+	})
+	return l
+}
+
+func TestImportDirStoresImagesAndDeletesTheirFiles(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	f := storetest.New(t)
+	dir := t.TempDir()
+	imp := newImporter(f)
+	direct := []string{ownerPhone, alice}
+	photo := withImage(t, dir, "a-1.png", pngImage, line("i1", direct, alice, "2026-03-14T18:22:00Z", ""))
+	writeCapture(t, filepath.Join(dir, "a.jsonl"), photo)
+
+	summary, err := imp.ImportDir(t.Context(), dir)
+	require.NoError(err, "ImportDir")
+	assert.Equal(1, summary.ImagesImported)
+	assertFolderEmpty(t, dir)
+
+	var filename, mimeType, mediaType, storagePath, contentHash string
+	var size int64
+	var hasAttachments bool
+	var count int
+	require.NoError(f.Store.DB().QueryRowContext(t.Context(), f.Store.Rebind(`
+		SELECT a.filename, a.mime_type, a.media_type, a.storage_path, a.content_hash, a.size,
+		       m.has_attachments, m.attachment_count
+		FROM attachments a JOIN messages m ON m.id = a.message_id
+		WHERE m.source_message_id = ?`), photo.MessageID).
+		Scan(&filename, &mimeType, &mediaType, &storagePath, &contentHash, &size, &hasAttachments, &count), "read attachment")
+	assert.Equal("image-1.png", filename)
+	assert.Equal("image/png", mimeType)
+	assert.Equal("image", mediaType)
+	assert.Equal(hashOf(string(pngImage)), contentHash)
+	assert.Equal(int64(len(pngImage)), size)
+	assert.True(hasAttachments, "has_attachments")
+	assert.Equal(1, count, "attachment_count")
+	stored, err := os.ReadFile(filepath.Join(imp.opts.AttachmentsDir, storagePath))
+	require.NoError(err, "read stored image")
+	assert.Equal(pngImage, stored)
+
+	// Capturing the thread again adds no second attachment.
+	again := withImage(t, dir, "b-1.png", pngImage, line("i1", direct, alice, "2026-03-14T18:22:00Z", ""))
+	writeCapture(t, filepath.Join(dir, "b.jsonl"), again)
+	_, err = imp.ImportDir(t.Context(), dir)
+	require.NoError(err, "second ImportDir")
+	var attachments int
+	require.NoError(f.Store.DB().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM attachments`).Scan(&attachments))
+	assert.Equal(1, attachments, "attachments after a second import")
+	assertFolderEmpty(t, dir)
+}
+
+func TestImportDirLeavesFileWhoseImageDoesNotMatch(t *testing.T) {
+	direct := []string{ownerPhone, alice}
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, dir string) Line
+		want  string
+	}{
+		{"missing image", func(t *testing.T, dir string) Line {
+			l := withImage(t, dir, "a-1.png", pngImage, line("i1", direct, alice, "2026-03-14T18:22:00Z", ""))
+			require.NoError(t, os.Remove(filepath.Join(dir, "a-1.png")))
+			return l
+		}, "line 2: attachment 0: file is missing"},
+		{"changed image", func(t *testing.T, dir string) Line {
+			l := withImage(t, dir, "a-1.png", pngImage, line("i1", direct, alice, "2026-03-14T18:22:00Z", ""))
+			changed := append([]byte{}, pngImage...)
+			changed[len(changed)-1] ^= 1
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "a-1.png"), changed, 0o600))
+			return l
+		}, "line 2: attachment 0: file content does not match sha256"},
+		{"not the listed type", func(t *testing.T, dir string) Line {
+			gif := []byte("GIF89a made-up")
+			return withImage(t, dir, "a-1.png", gif, line("i1", direct, alice, "2026-03-14T18:22:00Z", ""))
+		}, "line 2: attachment 0: file content is not of its mime_type"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := storetest.New(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, "a.jsonl")
+			writeCapture(t, path, directLines()[0], tt.setup(t, dir))
+			_, err := newImporter(f).ImportDir(t.Context(), dir)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "capture file a.jsonl: "+tt.want)
+			// Nothing from the file is stored, and it stays for the next run.
+			assertMessageCount(t, f.Store, 0)
+			assert.FileExists(t, path)
+		})
+	}
+}
+
+func TestImportDirNeedsAttachmentsFolderForImages(t *testing.T) {
+	f := storetest.New(t)
+	dir := t.TempDir()
+	photo := withImage(t, dir, "a-1.png", pngImage, line("i1", []string{ownerPhone, alice}, alice, "2026-03-14T18:22:00Z", ""))
+	writeCapture(t, filepath.Join(dir, "a.jsonl"), photo)
+	_, err := NewImporter(f.Store, ImportOptions{OwnerPhone: ownerPhone}).ImportDir(t.Context(), dir)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "no attachments folder is configured")
+	assert.FileExists(t, filepath.Join(dir, "a-1.png"))
 }

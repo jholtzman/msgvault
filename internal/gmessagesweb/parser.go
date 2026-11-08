@@ -2,6 +2,8 @@ package gmessagesweb
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -26,11 +28,19 @@ const (
 	MaxParticipants = 1000
 	// MaxPageMessageIDBytes bounds the page's own message ID.
 	MaxPageMessageIDBytes = 256
+	// MaxAttachments bounds the images in one message.
+	MaxAttachments = 20
+	// MaxAttachmentBytes bounds one image, as the SMS Backup & Restore
+	// importer bounds an MMS part.
+	MaxAttachmentBytes = 25 << 20
 )
 
 var (
 	hexSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	e164      = regexp.MustCompile(`^\+[1-9][0-9]{6,14}$`)
+	// An attachment file sits directly in the capture folder, is not hidden
+	// and is not itself a capture file.
+	attachmentFile = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,199}$`)
 )
 
 // LineError names the line of a capture file that failed.
@@ -116,12 +126,17 @@ func (l *Line) validate(ownerPhone string) (time.Time, error) {
 		return time.Time{}, errors.New("text is not valid UTF-8")
 	case l.Attachments == nil:
 		return time.Time{}, errors.New("attachments is missing")
-	case len(l.Attachments) != 0:
-		return time.Time{}, errors.New("attachments are not supported")
+	case len(l.Attachments) > MaxAttachments:
+		return time.Time{}, fmt.Errorf("attachments has more than %d entries", MaxAttachments)
 	case len(l.PageMessageID) > MaxPageMessageIDBytes:
 		return time.Time{}, fmt.Errorf("page_message_id is longer than %d bytes", MaxPageMessageIDBytes)
 	case !printable(l.PageMessageID):
 		return time.Time{}, errors.New("page_message_id is not printable text")
+	}
+	for n, a := range l.Attachments {
+		if err := a.validate(); err != nil {
+			return time.Time{}, fmt.Errorf("attachment %d: %w", n, err)
+		}
 	}
 	hasSender, hasOwner := false, false
 	for i, p := range l.Participants {
@@ -148,6 +163,66 @@ func (l *Line) validate(ownerPhone string) (time.Time, error) {
 		return time.Time{}, errors.New("captured_at is not a UTC time")
 	}
 	return sentAt, nil
+}
+
+func (a *Attachment) validate() error {
+	switch {
+	case !attachmentFile.MatchString(a.File) || strings.HasSuffix(a.File, FileExtension):
+		return errors.New("file is not a plain file name in the capture folder")
+	case imageExtensions[a.MIMEType] == "":
+		return errors.New("mime_type is not a supported image type")
+	case a.Size < 1 || a.Size > MaxAttachmentBytes:
+		return fmt.Errorf("size is not between 1 and %d bytes", MaxAttachmentBytes)
+	case !hexSHA256.MatchString(a.SHA256):
+		return errors.New("sha256 is not a lowercase hex SHA-256")
+	}
+	return nil
+}
+
+// LoadAttachments reads every image the messages list from dir into their
+// Content, checking each file's size, hash, and type against its listing.
+// The error names the message by its line.
+func LoadAttachments(dir string, messages []Message) error {
+	for n := range messages {
+		msg := &messages[n]
+		msg.Content = make([][]byte, len(msg.Attachments))
+		for k, a := range msg.Attachments {
+			data, err := readAttachment(filepath.Join(dir, a.File), a)
+			if err != nil {
+				return &LineError{Line: n + 1, Err: fmt.Errorf("attachment %d: %w", k, err)}
+			}
+			msg.Content[k] = data
+		}
+	}
+	return nil
+}
+
+func readAttachment(path string, a Attachment) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, errors.New("file is missing")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("file is not a regular file")
+	}
+	if info.Size() != a.Size {
+		return nil, errors.New("file size does not match size")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(data)
+	if int64(len(data)) != a.Size || hex.EncodeToString(sum[:]) != a.SHA256 {
+		return nil, errors.New("file content does not match sha256")
+	}
+	if sniffImage(data) != a.MIMEType {
+		return nil, errors.New("file content is not of its mime_type")
+	}
+	return data, nil
 }
 
 func printable(s string) bool {

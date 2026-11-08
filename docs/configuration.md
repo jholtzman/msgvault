@@ -1427,7 +1427,7 @@ Scheduled SMS Backup & Restore sources are configured with `[[synctech_sms.sourc
 
 `msgvault serve` imports a folder of Google Messages for web capture files on
 a schedule when it has a `[[google_messages_web.sources]]` entry. Each run
-deletes the files it imports; a file that fails stays in the folder and fails
+deletes the files and images it imports; a file that fails stays in the folder and fails
 the run, and the next run tries it again. See
 [import-google-messages-web](usage/text-messages.md#import-google-messages-web)
 for the file format.

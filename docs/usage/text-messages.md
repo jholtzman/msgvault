@@ -451,8 +451,10 @@ msgvault import-google-messages-web <folder> --owner-phone <your-number>
 ```
 
 The importer reads every `.jsonl` file directly inside the folder, oldest name
-first, and deletes each file once all of its messages are stored. Files whose
-names start with a dot are still being written and are skipped.
+first, and deletes each file and the images it lists once all of its messages
+are stored. Files whose names start with a dot are still being written and are
+skipped. Images go into msgvault's attachment store and show on their
+messages.
 
 When a file fails to import, it stays in the folder and the error names the
 file and line. The other files in the folder are still imported, and the
@@ -477,13 +479,27 @@ these fields:
 | `sent_at` | UTC time to the minute, such as `2026-03-14T18:22:00Z`. |
 | `sent_at_precision` | Always `minute`, the precision Messages for web shows. |
 | `text` | The message text. |
-| `attachments` | Always `[]`. Images are not imported yet. |
+| `attachments` | The message's images, or `[]`. Each is an object described below. |
 | `captured_at` | UTC time the capture tool read the message. |
 | `page_message_id` | The page's own ID for the message, kept with the raw record. |
 
 ```json
 {"message_id":"9f2c…","conversation_id":"41ab…","participants":["+14155550100","+14155550142"],"sender":"+14155550142","sent_at":"2026-03-14T18:22:00Z","sent_at_precision":"minute","text":"Running ten minutes late","attachments":[],"captured_at":"2026-03-14T18:25:31Z","page_message_id":"101"}
 ```
+
+Each entry in `attachments` names an image file directly inside the same
+folder. A message has at most 20 images.
+
+| Field | Description |
+|---|---|
+| `file` | The image file's name. It cannot contain a path, start with a dot, or end in `.jsonl`. |
+| `mime_type` | One of `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `image/heic`, `image/heif` or `image/avif`. The file's content must be of this type. |
+| `size` | The file's size in bytes, at most 25 MiB. |
+| `sha256` | Lowercase hex SHA-256 of the file's content. |
+
+The importer reads and checks every image a capture file lists before storing
+any of its messages. A missing image, or one whose size, hash or type does not
+match, fails the file like an invalid line.
 
 msgvault does not compute either ID. The capture tool must derive them the
 same way every time it captures the same message, or a second capture adds
