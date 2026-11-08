@@ -477,12 +477,11 @@ func TestPersonMerge_IdentityReadFailureKeepsRecordedNames(t *testing.T) {
 			require.NoError(err)
 			assert.NotEmpty(listed[0].Labels.Participants)
 			assert.NotEmpty(detail.Participants)
-			history, historyErr := f.store.GetPersonProfileHistoryContext(t.Context(), f.merge.Person.ID)
+			_, historyErr := f.store.GetPersonProfileHistoryContext(t.Context(), f.merge.Person.ID)
 			if failure == "identifiers" {
 				require.Error(historyErr)
 			} else {
-				require.NoError(historyErr)
-				assert.NotEmpty(history.MergedIn)
+				require.ErrorIs(historyErr, store.ErrPersonMergeSnapshotCorrupt)
 			}
 			for _, labels := range []store.PersonMergeLabels{listed[0].Labels, detail.Labels} {
 				assert.True(labels.Incomplete)

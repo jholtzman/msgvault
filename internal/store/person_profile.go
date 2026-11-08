@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -313,34 +314,8 @@ func (s *Store) getPersonProfileTx(
 }
 
 func (s *Store) personMergedInParticipantsTx(ctx context.Context, tx *loggedTx, personID int64) ([]PersonMergedInParticipant, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT m.id, p.participant_id, m.created_at
-		FROM person_merges m JOIN person_merge_participants p ON p.merge_id = m.id
-		WHERE m.current_person_id = ? AND p.origin_side = 'absorbed' AND p.split_id IS NULL
-		AND EXISTS (SELECT 1 FROM person_participants b WHERE b.person_id = ? AND b.participant_id = p.participant_id)
-		ORDER BY m.created_at DESC, m.id DESC, p.participant_id`, personID, personID)
+	result, ids, err := recordedPersonMergedInParticipantsTx(ctx, tx, personID)
 	if err != nil {
-		return nil, fmt.Errorf("read merged-in participants: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	result := []PersonMergedInParticipant{}
-	ids := []int64{}
-	seen := map[int64]bool{}
-	for rows.Next() {
-		var item PersonMergedInParticipant
-		if err := rows.Scan(&item.MergeID, &item.ParticipantID, &item.MergedAt); err != nil {
-			return nil, fmt.Errorf("scan merged-in participant: %w", err)
-		}
-		if !seen[item.ParticipantID] {
-			seen[item.ParticipantID] = true
-			item.Identifiers = []ParticipantIdentifierContext{}
-			result = append(result, item)
-			ids = append(ids, item.ParticipantID)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
 		return nil, err
 	}
 	identities, err := s.getParticipantIdentityContext(ctx, tx.Tx, ids, false)
@@ -359,4 +334,76 @@ func (s *Store) personMergedInParticipantsTx(ctx context.Context, tx *loggedTx, 
 		item.Identifiers = append(item.Identifiers, identifier)
 	}
 	return result, nil
+}
+
+// recordedPersonMergedInParticipantsTx picks each bound participant's newest
+// active merge whose snapshot recorded it on the absorbed profile. Identity
+// links added afterwards extend live lineage so Split can still move them, but
+// that merge did not bring them in.
+func recordedPersonMergedInParticipantsTx(ctx context.Context, tx *loggedTx, personID int64) ([]PersonMergedInParticipant, []int64, error) {
+	recorded, err := recordedPersonMergeAbsorbedParticipantsTx(ctx, tx, personID)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT m.id, p.participant_id, m.created_at
+		FROM person_merges m JOIN person_merge_participants p ON p.merge_id = m.id
+		WHERE m.current_person_id = ? AND p.origin_side = 'absorbed' AND p.split_id IS NULL
+		AND EXISTS (SELECT 1 FROM person_participants b WHERE b.person_id = ? AND b.participant_id = p.participant_id)
+		ORDER BY m.created_at DESC, m.id DESC, p.participant_id`, personID, personID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read merged-in participants: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	result := []PersonMergedInParticipant{}
+	ids := []int64{}
+	seen := map[int64]bool{}
+	for rows.Next() {
+		var item PersonMergedInParticipant
+		if err := rows.Scan(&item.MergeID, &item.ParticipantID, &item.MergedAt); err != nil {
+			return nil, nil, fmt.Errorf("scan merged-in participant: %w", err)
+		}
+		if !seen[item.ParticipantID] && recorded[item.MergeID][item.ParticipantID] {
+			seen[item.ParticipantID] = true
+			item.Identifiers = []ParticipantIdentifierContext{}
+			result = append(result, item)
+			ids = append(ids, item.ParticipantID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return result, ids, rows.Close()
+}
+
+// recordedPersonMergeAbsorbedParticipantsTx reads absorbed-profile membership
+// from each active merge snapshot. A snapshot that cannot be decoded fails the
+// read, so History offers Retry instead of showing incomplete provenance.
+func recordedPersonMergeAbsorbedParticipantsTx(ctx context.Context, tx *loggedTx, personID int64) (map[int64]map[int64]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id, snapshot_blob, snapshot_sha256
+		FROM person_merges WHERE current_person_id = ?`, personID)
+	if err != nil {
+		return nil, fmt.Errorf("read merged-in snapshots: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	recorded := map[int64]map[int64]bool{}
+	for rows.Next() {
+		var mergeID int64
+		var blob []byte
+		var hash string
+		if err := rows.Scan(&mergeID, &blob, &hash); err != nil {
+			return nil, fmt.Errorf("scan merged-in snapshot: %w", err)
+		}
+		snapshot, err := decodePersonMergeSnapshot(blob, hash)
+		if _, rootErr := absorbedPersonMergeSnapshotRoot(snapshot); err != nil || rootErr != nil {
+			return nil, fmt.Errorf("decode merged-in snapshot %d: %w", mergeID, cmp.Or(err, rootErr))
+		}
+		recorded[mergeID] = map[int64]bool{}
+		for _, participantID := range snapshot.Persons[1].ParticipantIDs {
+			recorded[mergeID][participantID] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return recorded, rows.Close()
 }

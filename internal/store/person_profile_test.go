@@ -359,3 +359,49 @@ func TestPersonProfileHistoryMergedInSpansPagesAndFollowsBindings(t *testing.T) 
 		assert.NotEqual(lastParticipant, item.ParticipantID)
 	}
 }
+
+func TestPersonProfileHistoryOnlyAttributesRecordedMergeMembers(t *testing.T) {
+	for _, chained := range []bool{false, true} {
+		t.Run(strconv.FormatBool(chained), func(t *testing.T) {
+			require := require.New(t)
+			assert := assert.New(t)
+			st := storetest.New(t).Store
+			ctx := t.Context()
+			survivor := mustPromotedPerson(ctx, t, st, "owner@example.org", "Owner")
+			absorbed := mustPromotedPerson(ctx, t, st, "original@example.org", "Original")
+			merged, err := st.MergePersonsContext(ctx, store.PersonMergeRequest{SurvivorID: survivor.ID, AbsorbedID: absorbed.ID, ExpectedSurvivorRevision: survivor.Revision, ExpectedAbsorbedRevision: absorbed.Revision, IdempotencyKey: "recorded-first", Actor: "test"})
+			require.NoError(err)
+			later, err := st.EnsureParticipant("later@example.org", "Later", "example.org")
+			require.NoError(err)
+			_, err = st.LinkParticipants(absorbed.ParticipantIDs[0], later)
+			require.NoError(err)
+			personID, mergeID := survivor.ID, merged.Merge.ID
+			want := map[int64]int64{absorbed.ParticipantIDs[0]: mergeID}
+			if chained {
+				current, err := st.GetPersonContext(ctx, survivor.ID)
+				require.NoError(err)
+				destination := mustPromotedPerson(ctx, t, st, "destination@example.org", "Destination")
+				carried, err := st.MergePersonsContext(ctx, store.PersonMergeRequest{SurvivorID: destination.ID, AbsorbedID: current.ID, ExpectedSurvivorRevision: destination.Revision, ExpectedAbsorbedRevision: current.Revision, IdempotencyKey: "recorded-carried", Actor: "test"})
+				require.NoError(err)
+				personID, mergeID = destination.ID, carried.Merge.ID
+				// The second merge really captured the first late link, so it now has merge provenance.
+				want = map[int64]int64{survivor.ParticipantIDs[0]: mergeID, absorbed.ParticipantIDs[0]: mergeID, later: mergeID}
+				later, err = st.EnsureParticipant("after-chain@example.org", "After chain", "example.org")
+				require.NoError(err)
+				_, err = st.LinkParticipants(absorbed.ParticipantIDs[0], later)
+				require.NoError(err)
+			}
+			history, err := st.GetPersonProfileHistoryContext(ctx, personID)
+			require.NoError(err)
+			got := map[int64]int64{}
+			for _, item := range history.MergedIn {
+				got[item.ParticipantID] = item.MergeID
+			}
+			assert.Equal(want, got, "a later identity link was not brought in by the earlier merge")
+			// Split still needs live lineage, including identities linked after the recorded merge.
+			detail, err := st.GetPersonMergeContext(ctx, mergeID)
+			require.NoError(err)
+			assert.Contains(detail.Participants, store.PersonMergeParticipant{MergeID: mergeID, ParticipantID: later, OriginSide: "absorbed"})
+		})
+	}
+}
