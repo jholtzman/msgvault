@@ -464,6 +464,34 @@ stores none of its messages.
 | Flag | Default | Description |
 |---|---|---|
 | `--owner-phone` | (required) | Your phone number in E.164 format. It must be a participant in every captured message. |
+| `--contacts` | — | Path to a contacts `.vcf` file used to name participants |
+
+### Name participants from your contacts
+
+Capture files carry phone numbers only, so conversations show numbers until
+a name is known. To name them, export your contacts as a vCard file, for
+example from Google Contacts with **Export** and the vCard format, and pass
+it with `--contacts`:
+
+```bash
+msgvault import-google-messages-web <folder> --owner-phone <your-number> \
+  --contacts ~/contacts.vcf
+```
+
+msgvault reads the file after the import. A participant with one of a
+contact's numbers and no name yet gets that contact's name; a name another
+source already set is kept. Numbers such as `(415) 555-0123` match
+`+14155550123`: a ten-digit number without a country code is read as a US
+number. The command prints how many contacts named someone. Because the file
+is read even when the folder is empty, running the command again with a new
+export names people captured since the last one.
+
+Scheduled imports read a contacts file when their source sets `contacts`
+(see [Google Messages for web sources](../configuration.md#google-messages-for-web-sources)).
+Each run then names the people in the messages it imports, so keep the file
+at that path and replace it with a new export when your contacts change. On
+macOS, keep it outside Downloads, Desktop and Documents, which the daemon may
+not be allowed to read.
 
 ### Capture file format
 

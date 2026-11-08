@@ -1007,6 +1007,7 @@ enabled = true
 path = "~/captures/spool"
 owner_phone = "+15555550100"
 schedule = "*/30 * * * *"
+contacts = "~/captures/contacts.vcf"
 
 [[google_messages_web.sources]]
 name = "paused"
@@ -1027,6 +1028,7 @@ schedule = "*/30 * * * *"
 		Path:       filepath.Join(home, "captures/spool"),
 		OwnerPhone: "+15555550100",
 		Schedule:   "*/30 * * * *",
+		Contacts:   filepath.Join(home, "captures/contacts.vcf"),
 	}, got[0])
 }
 

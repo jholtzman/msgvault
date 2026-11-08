@@ -459,6 +459,9 @@ type GoogleMessagesWebSource struct {
 	Path       string `toml:"path"`
 	OwnerPhone string `toml:"owner_phone"`
 	Schedule   string `toml:"schedule"`
+	// Contacts is an optional vCard file read after each import to name
+	// participants that have no name yet.
+	Contacts string `toml:"contacts"`
 }
 
 // RemoteConfig holds configuration for a remote msgvault server.
@@ -1229,6 +1232,7 @@ func decodeConfig(cfg *Config, path string, explicit, homeOverride bool, content
 	for i := range cfg.GoogleMessagesWeb.Sources {
 		src := &cfg.GoogleMessagesWeb.Sources[i]
 		src.Path = expandPath(src.Path)
+		src.Contacts = expandPath(src.Contacts)
 		if !src.Enabled {
 			continue
 		}
@@ -1266,6 +1270,7 @@ func decodeConfig(cfg *Config, path string, explicit, homeOverride bool, content
 		}
 		for i := range cfg.GoogleMessagesWeb.Sources {
 			cfg.GoogleMessagesWeb.Sources[i].Path = resolveRelative(cfg.GoogleMessagesWeb.Sources[i].Path, cfg.HomeDir)
+			cfg.GoogleMessagesWeb.Sources[i].Contacts = resolveRelative(cfg.GoogleMessagesWeb.Sources[i].Contacts, cfg.HomeDir)
 		}
 		cfg.Backup.Repo = resolveRelative(cfg.Backup.Repo, cfg.HomeDir)
 		for i := range cfg.Muesli {

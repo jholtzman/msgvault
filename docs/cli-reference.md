@@ -2450,6 +2450,7 @@ msgvault import-google-messages-web <folder> --owner-phone <your-number>
 | Flag | Default | Description |
 |---|---|---|
 | `--owner-phone` | (required) | Your phone number in E.164 format |
+| `--contacts` | — | vCard file used to fill empty participant names, read after the import |
 
 See [Text Messages](/docs/usage/text-messages/#import-google-messages-web) for the capture file format.
 

@@ -1439,6 +1439,7 @@ enabled = true
 path = "~/captures/google-messages"
 owner_phone = "+14155550100"
 schedule = "*/30 * * * *"
+contacts = "~/.msgvault/contacts.vcf"
 ```
 
 | Key | Default | Description |
@@ -1448,6 +1449,7 @@ schedule = "*/30 * * * *"
 | `path` | (required when enabled) | Folder of capture files. `~` expands to your home folder. |
 | `owner_phone` | (required when enabled) | Your phone number in E.164 format |
 | `schedule` | — | Cron expression used by `msgvault serve`. An enabled source without one is not scheduled. |
+| `contacts` | — | vCard file read after every run to name participants that have no name yet. See [naming participants](usage/text-messages.md#name-participants-from-your-contacts). A missing or unreadable file fails the run after its messages are stored. `~` expands to your home folder. |
 
 ### Google Calendar Sources
 

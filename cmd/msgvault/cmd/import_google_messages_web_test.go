@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,7 +11,66 @@ import (
 	"go.kenn.io/msgvault/internal/config"
 	"go.kenn.io/msgvault/internal/gmessagesweb"
 	"go.kenn.io/msgvault/internal/store"
+	"go.kenn.io/msgvault/internal/testutil/storetest"
 )
+
+// scheduledGoogleMessagesWebSource writes one capture file to a new folder
+// and returns a source for it with the given contacts file.
+func scheduledGoogleMessagesWebSource(t *testing.T, contacts string) config.GoogleMessagesWebSource {
+	t.Helper()
+	folder := t.TempDir()
+	capture := filepath.Join(folder, "20260314T182531.000000000Z-0a0b0c0d.jsonl")
+	require.NoError(t, os.WriteFile(capture, []byte(googleMessagesWebCapture), 0o600), "write capture")
+	return config.GoogleMessagesWebSource{
+		Name: "phone", Enabled: true, Path: folder, OwnerPhone: "+15555550100",
+		Schedule: "*/30 * * * *", Contacts: contacts,
+	}
+}
+
+func newScheduledGoogleMessagesWebStore(t *testing.T) *storetest.Fixture {
+	t.Helper()
+	stubScheduledCacheBuild(t)
+	return storetest.New(t)
+}
+
+func TestScheduledGoogleMessagesWebNamesNewParticipants(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	f := newScheduledGoogleMessagesWebStore(t)
+	cfg := config.NewDefaultConfig()
+	cfg.HomeDir = t.TempDir()
+	cfg.Data.DataDir = cfg.HomeDir
+	ctx := testInvocationContext(t.Context(), cfg, invocationOptions{})
+	contacts := filepath.Join(t.TempDir(), "contacts.vcf")
+	require.NoError(os.WriteFile(contacts, []byte(
+		"BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Example\r\nTEL;TYPE=CELL:(555) 555-0101\r\nEND:VCARD\r\n"), 0o600),
+		"write contacts")
+
+	require.NoError(runScheduledGoogleMessagesWebSource(ctx, f.Store, scheduledGoogleMessagesWebSource(t, contacts)))
+	var name string
+	require.NoError(f.Store.DB().QueryRowContext(t.Context(), f.Store.Rebind(
+		`SELECT display_name FROM participants WHERE phone_number = ?`), "+15555550101").Scan(&name), "read name")
+	assert.Equal("Alice Example", name, "a participant first seen in this run is named")
+}
+
+func TestScheduledGoogleMessagesWebFailsOnMissingContactsButKeepsMessages(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	f := newScheduledGoogleMessagesWebStore(t)
+	cfg := config.NewDefaultConfig()
+	cfg.HomeDir = t.TempDir()
+	cfg.Data.DataDir = cfg.HomeDir
+	ctx := testInvocationContext(t.Context(), cfg, invocationOptions{})
+	src := scheduledGoogleMessagesWebSource(t, filepath.Join(t.TempDir(), "missing.vcf"))
+
+	err := runScheduledGoogleMessagesWebSource(ctx, f.Store, src)
+	require.Error(err)
+	assert.ErrorContains(err, "read contacts")
+	var count int
+	require.NoError(f.Store.DB().QueryRowContext(t.Context(), f.Store.Rebind(
+		`SELECT COUNT(*) FROM messages WHERE message_type = ?`), gmessagesweb.MessageType).Scan(&count), "count messages")
+	assert.Equal(1, count, "the capture is imported although the contacts file is missing")
+}
 
 // googleMessagesWebCapture is one made-up capture line between the owner,
 // +15555550100, and +15555550101.
@@ -59,4 +119,45 @@ func TestImportGoogleMessagesWebCommandImportsAndDeletes(t *testing.T) {
 	require.NoError(st.DB().QueryRowContext(t.Context(), st.Rebind(
 		`SELECT COUNT(*) FROM messages WHERE message_type = ?`), gmessagesweb.MessageType).Scan(&count), "count messages")
 	assert.Equal(1, count, "imported messages")
+}
+
+func TestImportGoogleMessagesWebCommandNamesParticipantsFromContacts(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	markDaemonCLISubprocessForTest(t)
+
+	home := t.TempDir()
+	folder := t.TempDir()
+	capture := filepath.Join(folder, "20260314T182531.000000000Z-0a0b0c0d.jsonl")
+	require.NoError(os.WriteFile(capture, []byte(googleMessagesWebCapture), 0o600), "write capture")
+	contacts := filepath.Join(t.TempDir(), "contacts.vcf")
+	require.NoError(os.WriteFile(contacts, []byte(
+		"BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Example\r\nTEL;TYPE=CELL:(555) 555-0101\r\nEND:VCARD\r\n"), 0o600),
+		"write contacts")
+	cfg := config.NewDefaultConfig()
+	cfg.HomeDir = home
+	cfg.Data.DataDir = home
+	run := func(args ...string) string {
+		cmd := newTestRootCmd()
+		cmd.SetContext(testInvocationContext(t.Context(), cfg, invocationOptions{}))
+		cmd.AddCommand(newImportGoogleMessagesWebCmd())
+		var out strings.Builder
+		cmd.SetOut(&out)
+		cmd.SetArgs(append([]string{"import-google-messages-web", "--owner-phone", "+15555550100"}, args...))
+		require.NoError(cmd.Execute(), "Execute")
+		return out.String()
+	}
+	run(folder)
+	// The folder is empty now; the contacts still name the participant
+	// the first run stored.
+	out := run("--contacts", contacts, folder)
+	assert.Contains(out, "Named participants from 1 of 1 contacts")
+
+	st, err := store.Open(cfg.DatabaseDSN())
+	require.NoError(err, "open store")
+	t.Cleanup(func() { _ = st.Close() })
+	var name string
+	require.NoError(st.DB().QueryRowContext(t.Context(), st.Rebind(
+		`SELECT display_name FROM participants WHERE phone_number = ?`), "+15555550101").Scan(&name), "read name")
+	assert.Equal("Alice Example", name)
 }
