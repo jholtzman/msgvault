@@ -51,5 +51,5 @@
   h3 { margin-bottom: var(--space-group); font-size: var(--type-heading-size); line-height: var(--type-heading-line); }
   p { color: var(--text-muted); font-size: var(--type-meta-size); line-height: var(--type-meta-line); }
   ul { padding: 0; list-style: none; }
-  li { padding: var(--row-pad-y) var(--row-pad-x); box-shadow: inset 0 -1px 0 var(--border-muted); font-size: var(--type-body-size); line-height: var(--type-body-line); }
+  li { padding: var(--row-pad-y) var(--row-pad-x); box-shadow: inset 0 -1px 0 var(--border-muted); color: var(--text-primary); font-size: var(--type-body-size); line-height: var(--type-body-line); }
 </style>
