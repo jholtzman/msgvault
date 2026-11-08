@@ -50,3 +50,10 @@ export async function expectKitTheme(page: Page, theme: 'light' | 'dark'): Promi
 export async function stubOperationStatus(target: Page | BrowserContext): Promise<void> {
   await target.route('**/api/v1/operations/status', route => route.fulfill({ json: { lanes: lanes() } }));
 }
+
+/** Reports People sweep as configured, so person views show Facts and profile updates instead of their Set up lines. */
+export async function reportPeopleSweepOn(target: Page | BrowserContext): Promise<void> {
+  await target.route('**/api/v1/operations/status', route => route.fulfill({ json: {
+    lanes: lanes().map(lane => lane.kind === 'person_sweep' ? { ...lane, configured: true } : lane)
+  } }));
+}

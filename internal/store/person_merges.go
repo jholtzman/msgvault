@@ -219,16 +219,32 @@ type PersonMergeRow struct {
 	SplitID        *int64  `json:"split_id,omitzero" nullable:"false"`
 }
 
+type PersonMergeRecordedProfile struct {
+	ID             int64   `json:"id"`
+	DisplayName    *string `json:"display_name,omitzero" nullable:"false"`
+	ParticipantIDs []int64 `json:"participant_ids"`
+}
+
+type PersonMergeLabels struct {
+	Profiles     []PersonMergeRecordedProfile   `json:"profiles"`
+	Participants []PersonMergeParticipant       `json:"participants,omitempty"`
+	Members      []PersonClusterMember          `json:"members"`
+	Identifiers  []ParticipantIdentifierContext `json:"identifiers"`
+	Incomplete   bool                           `json:"incomplete"`
+}
+
 type PersonMergeSummary struct {
-	Merge                 PersonMerge    `json:"merge"`
-	ParticipantCount      int            `json:"participant_count"`
-	RowCount              int            `json:"row_count"`
-	SplitCount            int            `json:"split_count"`
-	PendingCandidateCount int            `json:"pending_candidate_count"`
-	RowActionCounts       map[string]int `json:"row_action_counts"`
+	Labels                PersonMergeLabels `json:"labels"`
+	Merge                 PersonMerge       `json:"merge"`
+	ParticipantCount      int               `json:"participant_count"`
+	RowCount              int               `json:"row_count"`
+	SplitCount            int               `json:"split_count"`
+	PendingCandidateCount int               `json:"pending_candidate_count"`
+	RowActionCounts       map[string]int    `json:"row_action_counts"`
 }
 
 type PersonMergeDetail struct {
+	Labels           PersonMergeLabels            `json:"labels"`
 	Merge            PersonMerge                  `json:"merge"`
 	Participants     []PersonMergeParticipant     `json:"participants"`
 	Rows             []PersonMergeRow             `json:"rows"`

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.kenn.io/msgvault/internal/identityindex"
+	"go.kenn.io/msgvault/internal/store"
 )
 
 const (
@@ -53,12 +54,7 @@ type PersonClusterLinkOrigin struct {
 	Basis  string `json:"basis,omitempty"`
 }
 
-type PersonClusterMember struct {
-	ParticipantID int64  `json:"participant_id"`
-	DisplayName   string `json:"display_name,omitempty"`
-	Email         string `json:"email,omitempty"`
-	Phone         string `json:"phone,omitempty"`
-}
+type PersonClusterMember = store.PersonClusterMember
 
 // PersonCluster describes the identity-link cluster a person detail belongs
 // to. CanonicalID is the cluster's smallest member ID, matching the store's

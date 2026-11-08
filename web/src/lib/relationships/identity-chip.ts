@@ -42,7 +42,7 @@ function linkOrigins(edges: PersonClusterEdge[]): string {
 }
 
 export function identityChipText(
-  identifier: PersonIdentifier | undefined,
+  identifier: Pick<PersonIdentifier, 'type' | 'value' | 'display_value' | 'service_label' | 'participant_display_name' | 'scope_kind' | 'scope_value'> | undefined,
   member: PersonClusterMember | undefined,
   edges: PersonClusterEdge[]
 ): IdentityChipText {

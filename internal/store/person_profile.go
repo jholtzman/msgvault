@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 type PersonProfile struct {
@@ -65,6 +66,16 @@ type PersonProfileHistory struct {
 	Categories    []PersonCategory                `json:"categories"`
 	Media         []PersonMedia                   `json:"media"`
 	Observations  []ParticipantContactObservation `json:"observations"`
+	MergedIn      []PersonMergedInParticipant     `json:"merged_in"`
+}
+
+// PersonMergedInParticipant is the latest unsplit merge that brought a current member in.
+type PersonMergedInParticipant struct {
+	MergeID       int64                          `json:"merge_id"`
+	ParticipantID int64                          `json:"participant_id"`
+	MergedAt      time.Time                      `json:"merged_at"`
+	Member        PersonClusterMember            `json:"member"`
+	Identifiers   []ParticipantIdentifierContext `json:"identifiers"`
 }
 
 const MaxPersonProfilePatchOperations = 200
@@ -153,11 +164,15 @@ func (s *Store) GetPersonProfileHistoryContext(
 		if err != nil {
 			return err
 		}
+		mergedIn, err := s.personMergedInParticipantsTx(ctx, tx, personID)
+		if err != nil {
+			return err
+		}
 		history = &PersonProfileHistory{
 			Person: profile.Person, Names: profile.Names,
 			ContactPoints: profile.ContactPoints, Addresses: profile.Addresses,
 			Dates: profile.Dates, Categories: profile.Categories,
-			Media: profile.Media, Observations: observations,
+			Media: profile.Media, Observations: observations, MergedIn: mergedIn,
 		}
 		return nil
 	})
@@ -295,4 +310,53 @@ func (s *Store) getPersonProfileTx(
 		return nil, err
 	}
 	return profile, nil
+}
+
+func (s *Store) personMergedInParticipantsTx(ctx context.Context, tx *loggedTx, personID int64) ([]PersonMergedInParticipant, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT m.id, p.participant_id, m.created_at
+		FROM person_merges m JOIN person_merge_participants p ON p.merge_id = m.id
+		WHERE m.current_person_id = ? AND p.origin_side = 'absorbed' AND p.split_id IS NULL
+		AND EXISTS (SELECT 1 FROM person_participants b WHERE b.person_id = ? AND b.participant_id = p.participant_id)
+		ORDER BY m.created_at DESC, m.id DESC, p.participant_id`, personID, personID)
+	if err != nil {
+		return nil, fmt.Errorf("read merged-in participants: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	result := []PersonMergedInParticipant{}
+	ids := []int64{}
+	seen := map[int64]bool{}
+	for rows.Next() {
+		var item PersonMergedInParticipant
+		if err := rows.Scan(&item.MergeID, &item.ParticipantID, &item.MergedAt); err != nil {
+			return nil, fmt.Errorf("scan merged-in participant: %w", err)
+		}
+		if !seen[item.ParticipantID] {
+			seen[item.ParticipantID] = true
+			item.Identifiers = []ParticipantIdentifierContext{}
+			result = append(result, item)
+			ids = append(ids, item.ParticipantID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	identities, err := s.getParticipantIdentityContext(ctx, tx.Tx, ids, false)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]*PersonMergedInParticipant, len(result))
+	for i := range result {
+		byID[result[i].ParticipantID] = &result[i]
+	}
+	for _, member := range identities.Members {
+		byID[member.ParticipantID].Member = member
+	}
+	for _, identifier := range identities.Identifiers {
+		item := byID[identifier.ParticipantID]
+		item.Identifiers = append(item.Identifiers, identifier)
+	}
+	return result, nil
 }

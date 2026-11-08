@@ -5,6 +5,7 @@
 export interface PersonClusterMember {
   display_name?: string;
   email?: string;
+  normalized_value?: string;
   participant_id: number;
   phone?: string;
   [key: string]: unknown;

@@ -5,6 +5,7 @@ import {
   listPersonMerges as generatedListPersonMerges,
   splitPersonMerge as generatedSplitPersonMerge,
 } from '../api/generated/api/api';
+import { mergeSummaryRow, type MergeLabels } from './merge-labels';
 import { createBrowserRequestID } from '../api/request-id';
 import type { APIClient } from '../api/client';
 import type {
@@ -51,8 +52,10 @@ export class PersonMergeHistoryController {
   historyLoading = $state(false);
   historyError = $state<string | null>(null);
   pendingHistoryOffset = $state<number | null>(null);
+  historyRows = $state(new Map<number, Awaited<ReturnType<typeof mergeSummaryRow>>>());
   selectedMergeID = $state<number | null>(null);
   detail = $state<MergeDetail | null>(null);
+  labels = $state<({ for: MergeDetail } & MergeLabels) | null>(null);
   detailLoading = $state(false);
   detailError = $state<string | null>(null);
   snapshot = $state<MergeSnapshot | null>(null);
@@ -111,7 +114,8 @@ export class PersonMergeHistoryController {
     return this.absorbedParticipants.length === 0;
   }
   get canOfferSplit(): boolean {
-    return !!this.detail?.merge.current_person_id && !this.committedResult;
+    return !!this.detail?.merge.current_person_id && !this.committedResult &&
+      (this.isZeroParticipantLineage || this.eligibleParticipantIDs.length > 0);
   }
   get splitBusy(): boolean {
     return this.splitPending || this.sourceLoading;
@@ -123,6 +127,7 @@ export class PersonMergeHistoryController {
     ++this.contextGeneration;
     this.personID = personID;
     this.history = [];
+    this.historyRows = new Map();
     this.historyOffset = 0;
     this.historyError = null;
     this.historyLoading = false;
@@ -154,6 +159,7 @@ export class PersonMergeHistoryController {
         this.history = response.data.merges ?? [];
         this.historyOffset = response.data.offset;
         this.pendingHistoryOffset = null;
+        this.historyRows = new Map(this.history.map(item => [item.merge.id, mergeSummaryRow(item)]));
       } else {
         this.history = retainedHistory;
         this.historyError = failureMessage(response.error, response.response.status);
@@ -205,8 +211,11 @@ export class PersonMergeHistoryController {
         },
       );
       if (!this.ownsDetail(request, generation, context, mergeID)) return;
-      if (response.data) this.detail = response.data;
-      else {
+      if (response.data) {
+        this.detail = response.data;
+        this.detailLoading = false;
+        await this.refreshLabels(this.detail);
+      } else {
         this.detail = retainedDetail;
         this.detailError = failureMessage(response.error, response.response.status);
       }
@@ -220,7 +229,12 @@ export class PersonMergeHistoryController {
     }
   }
   async retryDetail(): Promise<void> {
-    if (this.selectedMergeID !== null) await this.selectMerge(this.selectedMergeID);
+    if (this.splitBusy) return;
+    const mergeID = this.selectedMergeID, splitWasOpen = this.splitOpen, selected = this.selectedParticipantIDs;
+    if (mergeID !== null) await this.selectMerge(mergeID);
+    if (splitWasOpen && this.selectedMergeID === mergeID && this.detail && await this.openSplit()) {
+      this.selectedParticipantIDs = selected.filter(id => this.eligibleParticipantIDs.includes(id));
+    }
   }
   async revealSnapshot(): Promise<void> {
     if (this.selectedMergeID === null || this.snapshot || this.snapshotLoading) return;
@@ -278,7 +292,7 @@ export class PersonMergeHistoryController {
       if (!this.ownsSplit(request, generation, context, mergeID)) return false;
       const etag = response.response.headers.get('ETag');
       if (!response.data || response.data.id !== sourceID || !isMatchingPersonRevisionETag(etag, response.data)) {
-        this.sourceError = 'The current source profile and its revision could not be loaded. Try again.';
+        this.sourceError = "Couldn't load this profile.";
         return false;
       }
       this.sourcePerson = response.data;
@@ -325,7 +339,7 @@ export class PersonMergeHistoryController {
     )
       return false;
     if (!this.isZeroParticipantLineage && this.selectedParticipantIDs.length === 0) {
-      this.splitError = 'Select at least one eligible absorbed-lineage participant.';
+      this.splitError = 'Choose at least one address.';
       return false;
     }
     if (this.selectedParticipantIDs.some((id) => !this.eligibleParticipantIDs.includes(id))) return false;
@@ -432,6 +446,13 @@ export class PersonMergeHistoryController {
       if (generation === this.splitGeneration) this.splitPending = false;
     }
   }
+  async retryReconciliation(): Promise<void> {
+    const committed = this.committedResult;
+    if (!committed || this.splitBusy || this.destroyed) return;
+    this.reconciliationError = null;
+    this.committedReconciled = false;
+    await this.reconcileCommitted(committed.result, committed, () => !this.destroyed && this.committedResult === committed);
+  }
   destroy(): void {
     this.destroyed = true;
     ++this.contextGeneration;
@@ -439,6 +460,7 @@ export class PersonMergeHistoryController {
     this.snapshot = null;
     this.snapshotError = null;
     this.clearMergeContext();
+    this.historyRows = new Map();
   }
   private async loadFreshSplitState(
     target: StaleSplitReloadTarget,
@@ -447,21 +469,10 @@ export class PersonMergeHistoryController {
     owner: AbortController,
   ): Promise<boolean> {
     try {
+      const options = { ...this.client, signal: owner.signal };
       const [source, merge] = await Promise.all([
-        generatedGetPersonProfile(
-          { id: target.sourcePersonID },
-          {
-            ...this.client,
-            signal: owner.signal,
-          },
-        ),
-        generatedGetPersonMerge(
-          { mergeId: target.mergeID },
-          {
-            ...this.client,
-            signal: owner.signal,
-          },
-        ),
+        generatedGetPersonProfile({ id: target.sourcePersonID }, options),
+        generatedGetPersonMerge({ mergeId: target.mergeID }, options),
       ]);
       if (!this.ownsSplit(owner, generation, context, target.mergeID)) return false;
       const etag = source.response.headers.get('ETag');
@@ -475,24 +486,45 @@ export class PersonMergeHistoryController {
         mergeSourceID !== target.sourcePersonID
       ) {
         this.splitError =
-          'The split was stale, but the current source and merge detail could not both be reloaded. Try again.';
+          "This profile changed, and couldn't be reloaded with its merge.";
         return false;
       }
       this.sourcePerson = source.data;
       this.sourceETag = etag;
       this.detail = merge.data;
+      const detail = this.detail;
       this.selectedParticipantIDs = [];
       this.clearConfirmation();
+      await this.refreshLabels(detail);
       this.splitNeedsFreshState = false;
       this.staleReloadTarget = null;
-      this.splitError = 'The source changed while you were reviewing it. Confirm the current lineage before splitting.';
+      this.splitError = 'This profile changed since you opened it. Check its addresses, then split again.';
       return true;
     } catch {
       if (this.ownsSplit(owner, generation, context, target.mergeID)) {
         this.splitError =
-          'The split was stale, but the current source and merge detail could not both be reloaded. Try again.';
+          "This profile changed, and couldn't be reloaded with its merge.";
       }
       return false;
+    }
+  }
+  private async refreshLabels(detail: MergeDetail): Promise<void> {
+    const signal = this.detailAbort?.signal;
+    if (!signal || signal.aborted) return;
+    const row = mergeSummaryRow(detail);
+    const names = new Map(row.names);
+    let incomplete = row.incomplete;
+    for (const id of new Set((detail.splits ?? []).map(split => split.new_person_id))) {
+      try {
+        const response = await generatedGetPersonProfile({ id }, { ...this.client, signal });
+        const name = response.data?.display_name?.trim();
+        if (name) names.set(id, name);
+        if (!response.data && response.response.status !== 404) incomplete = true;
+      } catch { incomplete = true; }
+    }
+    if (!this.destroyed && !signal.aborted && this.detail === detail) {
+      this.historyRows = new Map(this.historyRows).set(detail.merge.id, row);
+      this.labels = { for: detail, ...row, names, incomplete };
     }
   }
   private async reconcileCommitted(
@@ -507,7 +539,7 @@ export class PersonMergeHistoryController {
     } catch {
       if (ownsContext() && this.committedResult === committed) {
         this.reconciliationError =
-          'The split completed, but the Directory refresh failed. Open either profile to load fresh data.';
+          'The split is done. Open either profile to load it fresh.';
       }
     }
   }
@@ -552,6 +584,7 @@ export class PersonMergeHistoryController {
   private clearMergeContext(): void {
     this.selectedMergeID = null;
     this.detail = null;
+    this.labels = null;
     this.detailLoading = false;
     this.detailError = null;
     this.snapshot = null;
@@ -631,5 +664,5 @@ function failureMessage(error: unknown, status: number): string {
   if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string')
     return error.message;
   if (error instanceof Error && error.message) return error.message;
-  return status ? `Request failed (${status})` : 'Request failed';
+  return status ? `The server answered ${status}.` : "Couldn't reach msgvault.";
 }

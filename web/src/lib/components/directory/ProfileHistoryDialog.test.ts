@@ -1,8 +1,11 @@
+import { PersonMergeHistoryController } from '../../directory/person-merge-history-controller.svelte';
+import { mergeResult } from '../../directory/entity-fixtures.test-support';
 import { emptyProfile } from '../../directory/profile-fixtures.test-support';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createAPIClient } from '../../api/client';
+import { valueProvenance } from './history-format';
 import ProfileHistoryDialog from './ProfileHistoryDialog.svelte';
 import { DirectoryProfileController } from '../../directory/profile-controller.svelte';
 import type { AttributeDefinition } from '../../api/generated/models';
@@ -49,13 +52,15 @@ describe('ProfileHistoryDialog', () => {
       }
       throw new Error(`unexpected ${url.pathname}`);
     }));
-    const controller = new DirectoryProfileController(client, 7, { person: person(), etags: {}, errors: { attributes: 'initial request failed' } });
+    const controller = new DirectoryProfileController(client, 7, { person: person(), etags: {}, errors: {} });
     const props = { client, controller, personID: 7, onClose: vi.fn() };
     const dialog = render(ProfileHistoryDialog, props);
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(`${failedSection} unavailable`));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain("Couldn't load field history."));
+    await fireEvent.click(screen.getByRole('alert').querySelector('summary')!);
+    expect(screen.getByRole('alert').textContent).toContain(`${failedSection} unavailable`);
     expect(await screen.findByText('Current Name')).toBeDefined();
     failing = false;
-    await fireEvent.click(screen.getByRole('button', { name: 'Retry attribute history' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Earlier note')).toBeDefined();
     expect(screen.queryByRole('alert')).toBeNull();
     await dialog.unmount();
@@ -101,31 +106,27 @@ describe('ProfileHistoryDialog', () => {
 
     render(ProfileHistoryDialog, { client, personID: 7, onClose: vi.fn() });
 
-    expect((await screen.findByText('Previous Name')).closest('li')?.textContent).toContain('Address book');
-    for (const title of ['Names', 'Contact points', 'Addresses', 'Dates', 'Categories', 'Media', 'Seen in services']) {
+    expect((await screen.findByText('Previous Name')).closest('.detail-row')?.textContent).toContain('From CardDAV contacts');
+    for (const title of ['Names', 'Email and phone', 'Addresses', 'Dates', 'Categories', 'Media', 'Seen in services']) {
       expect(screen.getByRole('heading', { name: title })).toBeDefined();
     }
     expect.soft(screen.getByText('Scheduled end category').closest('details')).not.toBeNull();
-    expect.soft(screen.getByText('Current Name').closest('li')?.textContent).toContain('Valid from:');
-    const dateText = '(Jul|Aug) \\d{1,2}, 2026';
+    const currentRow = screen.getByText('Current Name').closest('.detail-row')!;
+    const line = currentRow.querySelector<HTMLElement>('.description')!;
+    const expected = valueProvenance(currentEnvelope);
+    expect(line.textContent).toBe(expected.text);
+    expect(line.title).toBe(expected.title);
     for (const value of ['Current Name', 'current@example.com', 'Current address', 'Birthday: February 14', 'Current photo']) {
-      const row = screen.getByText(value).closest('li')!;
-      expect(row.closest('details')).toBeNull();
-      expect(row.textContent).toMatch(new RegExp(`You · .*Updated: ${dateText}`));
-      expect(row.textContent).not.toMatch(/Source:|\d{4}-\d{2}-\d{2}T/);
+      expect(screen.getByText(value).closest('details')).toBeNull();
     }
     const summaries = screen.getAllByText(/earlier values?$/).map((node) => node.textContent);
     expect(summaries).toEqual(['1 earlier value', '2 earlier values', '2 earlier values']);
     for (const value of ['Previous Name', 'Past category']) {
-      const row = screen.getByText(value).closest('li')!;
+      const row = screen.getByText(value).closest('.detail-row')!;
       expect(row.closest('details')).not.toBeNull();
-      expect(row.textContent).toMatch(new RegExp(`Valid until: ${dateText}`));
     }
-    const observed = screen.getByText('observed@example.test').closest('li')!;
-    expect(observed.textContent).toMatch(/Archive observation · Updated: .*· Jul 31, 2026/);
-    expect(screen.getByText('slack · workspace / workspace-a')).toBeDefined();
-    expect(screen.getByText('slack · workspace / workspace-b')).toBeDefined();
-    expect(screen.getByText('email')).toBeDefined();
+    expect(screen.getByText(/^Slack · workspace-a · You · /)).toBeDefined();
+    expect(screen.getByText(/^Slack · workspace-b · You · /)).toBeDefined();
     expect(document.body.textContent).not.toMatch(/Service:|Scope:|Observed:/);
     expect(requests.map((request) => new URL(request.url).pathname)).toContain('/api/v1/people/7/profile/history');
   });
@@ -143,36 +144,11 @@ describe('ProfileHistoryDialog', () => {
     });
     render(ProfileHistoryDialog, { client, personID: 7, onClose: vi.fn() });
 
-    const row = (await screen.findByText('observed@example.test')).closest('li')!;
-    expect(row.querySelector('small')?.textContent).toBe('email');
-    const metadata = row.querySelector('.meta')!.textContent!.trim();
-    expect(metadata).toMatch(/^Archive observation · Reference: synthetic-archive · Valid from: .+ · Updated: .+\s*· Jul 31, 2026, .+$/);
-    expect(metadata).not.toContain('987654321');
-  });
-
-  it.each([
-    { active_until: '2026-08-02T00:00:00Z' },
-    { superseded_at: '2026-08-03T00:00:00Z' },
-    { active_until: '2026-08-02T00:00:00Z', superseded_at: '2026-08-03T00:00:00Z' },
-  ])('shows each closed profile interval once in provenance: %j', async interval => {
-    const client = createAPIClient(async input => {
-      const request = input instanceof Request ? input : new Request(input);
-      if (new URL(request.url).pathname.endsWith('/merges')) return Response.json({ merges: [] });
-      return Response.json({ ...emptyProfile(person()), observations: [], names: [{
-        person_id: 7, name_kind: 'formatted', original_value: 'Earlier name', is_derived: false,
-        envelope: { id: 1, ordinal: 0, source: 'user', created_at: when, vcard: {}, ...interval },
-      }] });
-    });
-    render(ProfileHistoryDialog, { client, personID: 7, onClose: vi.fn() });
-
-    const row = (await screen.findByText('Earlier name')).closest('li')!;
-    expect(row.closest('details')).not.toBeNull();
-    const metadata = row.querySelector('.meta')!.textContent!.trim();
-    expect(metadata.split(' · ').map(part => part.split(': ')[0])).toEqual([
-      'You', ...(interval.active_until ? ['Valid until'] : []), ...(interval.superseded_at ? ['Superseded'] : []), 'Created',
-    ]);
-    if (interval.active_until) expect(metadata).toMatch(/Valid until: (Aug 1|Aug 2), 2026/);
-    if (interval.superseded_at) expect(metadata).toMatch(/Superseded: (Aug 2|Aug 3), 2026/);
+    const row = (await screen.findByText('observed@example.test')).closest('.detail-row')!;
+    const line = row.querySelector<HTMLElement>('.description')!;
+    expect(line.textContent).toMatch(/^Email · From your messages · /);
+    expect(line.title).toMatch(/Seen Jul 31, 2026/);
+    expect(row.textContent).not.toMatch(/987654321|synthetic-archive/);
   });
 
   it.each([false, true])('loads history before offering splits and refreshes after reconciliation (initial read fails=%s)', async initialFailure => {
@@ -188,6 +164,11 @@ describe('ProfileHistoryDialog', () => {
     const client = createAPIClient(async input => {
       const request = input instanceof Request ? input : new Request(input);
       const path = new URL(request.url).pathname;
+    const labels = {
+        profiles: [{ id: 9, display_name: 'Restored Person', participant_ids: [1] }, { id: 7, display_name: 'Retained name', participant_ids: [] }],
+        participants: [{ merge_id: 41, participant_id: 1, origin_side: 'absorbed', ...(reconciled ? { split_id: 55 } : {}) }], members: [{ participant_id: 1 }],
+        identifiers: [{ participant_id: 1, type: 'email', value: 'observed@example.com', normalized_value: 'observed@example.com', service_slug: 'email' }], incomplete: false,
+      };
       if (path.endsWith('/profile/history')) {
         historyReads += 1;
         if (initialFailure && historyReads === 1) return Response.json({ error: 'unavailable', message: 'history unavailable' }, { status: 503 });
@@ -195,8 +176,8 @@ describe('ProfileHistoryDialog', () => {
           person: reconciled ? remaining : source,
           names: [{ person_id: 7, name_kind: 'formatted', formatted: 'Retained name', original_value: 'Retained name', is_derived: false, envelope: { ...currentEnvelope, id: 1 } }, ...(reconciled ? [] : [{ person_id: 7, name_kind: 'nickname', formatted: 'Moved alias', original_value: 'Moved alias', is_derived: false, envelope: { ...currentEnvelope, id: 2 } }])],
           contact_points: reconciled ? [] : [{ person_id: 7, address_kind: 'email', original_value: 'moved@example.com', normalized_value: 'moved@example.com', normalization: 'email', normalization_version: 1, envelope: { ...currentEnvelope, id: 3 } }],
-          observations: reconciled ? [] : [{ participant_id: 1, address_kind: 'email', original_value: 'observed@example.com', normalized_value: 'observed@example.com', normalization: 'email', normalization_version: 1, observed_at: when, envelope: { ...currentEnvelope, id: 4, source: 'archive_observation' } }],
-          addresses: [], dates: [], categories: [], media: [],
+          observations: reconciled ? [] : [{ participant_id: 1, address_kind: 'email', original_value: 'observed@example.com', normalized_value: 'observed@example.com', service_slug: 'email', normalization: 'email', normalization_version: 1, observed_at: when, envelope: { ...currentEnvelope, id: 4, source: 'archive_observation' } }],
+          addresses: [], dates: [], categories: [], media: [], merged_in: reconciled ? [] : [{ merge_id: 41, participant_id: 1, merged_at: when, member: { participant_id: 1, email: 'carried@example.org', normalized_value: 'carried@example.org' }, identifiers: [] }],
         });
         if (historyReads === (initialFailure ? 2 : 1)) {
           initialResponse = response;
@@ -204,8 +185,8 @@ describe('ProfileHistoryDialog', () => {
         }
         return response;
       }
-      if (path.endsWith('/merges')) return Response.json({ merges: [{ merge, participant_count: 1, row_count: 0, pending_candidate_count: 0, split_count: 0, row_action_counts: {} }], limit: 100, offset: 0 });
-      if (path === '/api/v1/person-merges/41') return Response.json({ merge, participants: [{ merge_id: 41, participant_id: 1, origin_side: 'absorbed' }], rows: [], splits: [], review_candidates: [] });
+      if (path.endsWith('/merges')) return Response.json({ merges: [{ merge, labels, participant_count: 1, row_count: 0, pending_candidate_count: 0, split_count: 0, row_action_counts: {} }], limit: 100, offset: 0 });
+      if (path === '/api/v1/person-merges/41') return Response.json({ merge, labels, participants: [{ merge_id: 41, participant_id: 1, origin_side: 'absorbed' }], rows: [], splits: [], review_candidates: [] });
       if (path === '/api/v1/people/7') return Response.json(source, { headers: { ETag: '"person-7-r3"' } });
       if (path === '/api/v1/people/7/split') return Response.json({ source_person: remaining, new_person: restored, split: { id: 55, merge_id: 41, source_person_id: 7, new_person_id: 9, new_person_uid: 'person-9', source_revision_before: 3, source_revision_after: 4, exact_reversal: true, actor: 'web', created_at: when }, exact_reversal: true, ambiguous_rows: [], unrestored_rows: [], uid_alias_disposition: 'restored', identity_revision: 2, cache_state: 'ready' }, { headers: { ETag: '"person-7-r4"', 'X-New-Person-ETag': '"person-9-r1"' } });
       throw new Error(`unexpected ${request.method} ${path}`);
@@ -214,27 +195,122 @@ describe('ProfileHistoryDialog', () => {
     const view = render(ProfileHistoryDialog, { client, personID: 7, onClose: vi.fn(), onSplitCommitted });
     try {
       if (initialFailure) {
-        expect((await screen.findByRole('alert')).textContent).toBe('history unavailable');
-        await screen.findByRole('button', { name: 'Inspect merge 41' });
-        await fireEvent.click(screen.getByRole('button', { name: 'Retry history' }));
+        expect((await screen.findByRole('alert')).textContent).toContain("Couldn't load names, email, phone, and other details.");
+        await screen.findByRole('button', { name: /^Open .+ merged into .+ · / });
+        await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
       }
       await act(async () => { await vi.waitFor(() => expect(initialResponse).toBeDefined()); });
-      expect(screen.queryByRole('button', { name: 'Inspect merge 41' })).toBeNull();
+      expect(await screen.findByRole('button', { name: /^Open .+ merged into .+ · / })).toBeDefined();
       expect(screen.getByText('Loading profile history…')).toBeDefined();
       await act(async () => { releaseInitial(initialResponse!); });
-      for (const value of ['Moved alias', 'moved@example.com', 'observed@example.com']) expect(await screen.findByText(value)).toBeDefined();
-      await fireEvent.click(await screen.findByRole('button', { name: 'Inspect merge 41' }));
-      await fireEvent.click(await screen.findByRole('button', { name: 'Split merged profile' }));
-      await fireEvent.click(await screen.findByRole('checkbox', { name: 'Participant 1' }));
-      await fireEvent.click(screen.getByRole('checkbox', { name: /I confirm splitting/ }));
-      await fireEvent.click(screen.getByRole('button', { name: 'Create restored person' }));
+      for (const value of ['Moved alias', 'moved@example.com', 'observed@example.com', 'carried@example.org']) expect(await screen.findByText(value)).toBeDefined();
+      await fireEvent.click(await screen.findByRole('button', { name: /^Open .+ merged into .+ · / }));
+      await fireEvent.click(await screen.findByRole('button', { name: 'Split…' }));
+      await fireEvent.click(await screen.findByRole('checkbox', { name: 'observed@example.com' }));
+      await fireEvent.click(screen.getByRole('button', { name: 'Split into new person' }));
       await waitFor(() => {
         expect(onSplitCommitted).toHaveBeenCalledWith({ sourcePersonID: 7, newPersonID: 9 });
-        expect(screen.getByText('Retained name')).toBeDefined();
-        for (const value of ['Moved alias', 'moved@example.com', 'observed@example.com']) expect(screen.queryByText(value)).toBeNull();
+        expect(screen.getByRole('dialog', { name: 'Split complete' })).toBeDefined();
+        expect(historyReads).toBe(initialFailure ? 3 : 2);
       });
+      await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      view.unmount();
+      const reopened = render(ProfileHistoryDialog, { client, personID: 7, onClose: vi.fn() });
+      try {
+        expect(await screen.findByText('Retained name')).toBeDefined();
+        for (const value of ['Moved alias', 'moved@example.com', 'observed@example.com', 'carried@example.org']) expect(screen.queryByText(value)).toBeNull();
+      } finally { reopened.unmount(); }
     } finally { releaseInitial(initialResponse ?? Response.json({})); view.unmount(); }
   });
+});
 
+const mergedInCases = [
+  { name: 'email and split lineage', service: 'email', value: 'work@example.org', normalized: 'work@example.org', original: 'home@example.org', observed: 'home@example.org', kept: 'work@example.org', split: true },
+  { name: 'formatted phone', service: 'phone', value: '+15550100100', normalized: '+15550100100', display: '+1 555 010 0100', original: '+1 555 010 0100', observed: '+15550100100' },
+  { name: 'same handle in another workspace', service: 'slack', value: 'neri', normalized: 'neri', original: 'neri', observed: 'neri', scopeKind: 'workspace', scope: 'garden-club', otherScope: 'seed-exchange', kept: 'Slack · neri · workspace: seed-exchange' },
+  { name: 'case-distinct custom service', service: 'custom-chat', value: 'reader', normalized: 'reader', original: 'reader', observed: 'reader', second: 'Reader', scopeKind: 'server', scope: 'example.org', kept: 'custom-chat · Reader · server: example.org' },
+  { name: 'carried through successive merges', service: 'email', value: 'carried@example.org', normalized: 'carried@example.org', kept: 'carried@example.org', carried: true },
+  { name: 'curated mixed-case email', service: 'email', value: 'mira@example.org', normalized: 'mira@example.org', original: 'Mira@Example.org', observed: 'mira@example.org' },
+];
 
+async function renderMergedInAddress(entry: typeof mergedInCases[number]) {
+  const tc = entry as typeof entry & { display?: string; original?: string; observed?: string; scopeKind?: string; scope?: string; otherScope?: string; second?: string; kept?: string; split?: boolean; carried?: boolean };
+  const first = { ...mergeResult(person()).merge, id: 41, survivor_person_id: tc.carried ? 8 : 7, absorbed_person_id: 9, current_person_id: 7 };
+  const merges = tc.carried ? [{ ...first, id: 42, survivor_person_id: 7, absorbed_person_id: 8 }, first] : [first];
+  const identifiers = [{ participant_id: 1, type: tc.service === 'email' || tc.service === 'phone' ? tc.service : 'handle', value: tc.value, display_value: tc.display ?? '', normalized_value: tc.normalized, service_slug: tc.service, service_label: tc.service === 'slack' ? 'Slack' : tc.service, scope_kind: tc.scopeKind ?? '', scope_value: tc.scope ?? '' },
+    ...(tc.second || tc.otherScope ? [{ participant_id: 2, type: 'handle', value: tc.second ?? tc.value, display_value: '', normalized_value: tc.second ?? tc.normalized, service_slug: tc.service, service_label: tc.service === 'slack' ? 'Slack' : tc.service, scope_kind: tc.scopeKind ?? '', scope_value: tc.otherScope ?? tc.scope ?? '' }] : []),
+    ...(tc.split ? [{ participant_id: 3, type: 'email', value: 'other3@example.org', display_value: '', normalized_value: 'other3@example.org', service_slug: 'email', service_label: 'Email', scope_kind: '', scope_value: '' }] : [])];
+  const labels = (merge: typeof first) => ({
+    profiles: [{ id: merge.survivor_person_id, display_name: merge.id === 41 && tc.carried ? 'Earlier person' : 'Current person', participant_ids: [20] }, { id: merge.absorbed_person_id, display_name: merge.id === 42 ? 'Earlier person' : 'First person', participant_ids: identifiers.map(item => item.participant_id) }],
+    participants: [{ merge_id: merge.id, participant_id: 20, origin_side: 'survivor' }, ...identifiers.map(item => ({ merge_id: merge.id, participant_id: item.participant_id, origin_side: 'absorbed', ...(item.participant_id === 3 ? { split_id: 5 } : {}) }))],
+    members: [20, ...identifiers.map(item => item.participant_id)].map(participant_id => ({ participant_id })), identifiers, incomplete: false,
+  });
+  render(ProfileHistoryDialog, { personID: 7, onClose: vi.fn(), client: createAPIClient(async input => {
+    const path = new URL((input as Request).url).pathname;
+    if (path.endsWith('/merges')) return Response.json({ merges: merges.map(merge => ({ merge, labels: labels(merge), participant_count: identifiers.length + 1, row_count: 0, split_count: tc.split ? 1 : 0, pending_candidate_count: 0, row_action_counts: {} })), limit: 100, offset: 0 });
+    if (path.startsWith('/api/v1/person-merges/')) { const merge = merges.find(item => path.endsWith(`/${item.id}`))!; return Response.json({ merge, labels: labels(merge), participants: labels(merge).participants, rows: [], splits: [], review_candidates: [] }); }
+    return Response.json({ ...emptyProfile(person()), merged_in: identifiers.filter(item => item.participant_id !== 3).map(identifier => ({ merge_id: merges[0].id, participant_id: identifier.participant_id, merged_at: when, member: { participant_id: identifier.participant_id }, identifiers: [identifier] })), contact_points: tc.original ? [{ person_id: 7, address_kind: tc.service === 'email' || tc.service === 'phone' ? tc.service : 'username', original_value: tc.original, normalized_value: tc.observed, service_slug: tc.service, scope_kind: tc.scopeKind ?? '', scope_value: tc.scope ?? '', normalization: 'none', normalization_version: 1, envelope: { ...currentEnvelope, id: 3 } }] : [] });
+  }) });
+  await screen.findAllByRole('button', { name: /^Open .+ merged into .+ · / });
+  const section = screen.getByRole('heading', { name: 'Email and phone' }).closest('section')!;
+  return { tc, section };
+}
+
+it.each(mergedInCases)('lists each merged-in address once: $name', async entry => {
+  const { tc, section } = await renderMergedInAddress(entry);
+  if (tc.kept) {
+    expect(screen.getAllByRole('button', { name: `Open the merge that brought in ${tc.kept}` })).toHaveLength(1);
+  } else {
+    expect(section.querySelectorAll('.detail-row')).toHaveLength(1);
+    expect(section.textContent).toContain(tc.original);
+    expect(screen.queryByRole('button', { name: new RegExp('Open the merge that brought in') })).toBeNull();
+  }
+});
+
+it('shows merged-in provenance and opens its recorded merge', async () => {
+  const { section } = await renderMergedInAddress(mergedInCases[0]);
+  expect(section.textContent).not.toContain('other3@example.org');
+  const link = screen.getByRole('button', { name: 'Open the merge that brought in work@example.org' });
+  const row = link.closest('.detail-row')!;
+  expect(row.querySelector('.description')?.textContent).toMatch(/^Merged in · (Jul|Aug) \d{1,2}$/);
+  expect(row.querySelector('.description')?.getAttribute('title')).toMatch(/^Merged /);
+  const openMerge = vi.spyOn(PersonMergeHistoryController.prototype, 'selectMerge');
+  try {
+    await fireEvent.click(link);
+    expect(openMerge).toHaveBeenCalledWith(41);
+  } finally { openMerge.mockRestore(); }
+});
+
+it('opens the latest merge for an address carried through successive merges', async () => {
+  await renderMergedInAddress(mergedInCases[4]);
+  await fireEvent.click(screen.getByRole('button', { name: 'Open the merge that brought in carried@example.org' }));
+  expect(await screen.findByRole('dialog', { name: 'Earlier person merged into Current person' })).toBeDefined();
+});
+
+it('keeps all 101 merged addresses and their links while Merges changes pages', async () => {
+  const merges = Array.from({ length: 101 }, (_, index) => {
+    const merge = { ...mergeResult(person()).merge, id: index + 1, absorbed_person_id: index + 1000, current_person_id: 7 };
+    return {
+      merge, participant_count: 1, row_count: 0, split_count: 0, pending_candidate_count: 0, row_action_counts: {},
+      labels: { profiles: [{ id: merge.absorbed_person_id, display_name: `Sender ${index}`, participant_ids: [index + 1] }, { id: 7, display_name: 'Current person', participant_ids: [] }], participants: [{ merge_id: merge.id, participant_id: index + 1, origin_side: 'absorbed' }], members: [{ participant_id: index + 1, email: `sender${index}@example.org`, normalized_value: `sender${index}@example.org` }], identifiers: [], incomplete: false },
+    };
+  });
+  const client = createAPIClient(async input => {
+    const url = new URL((input as Request).url);
+    if (url.pathname.endsWith('/merges')) {
+      const offset = Number(url.searchParams.get('offset') ?? 0);
+      return Response.json({ merges: merges.slice(offset, offset + 100), limit: 100, offset });
+    }
+    if (url.pathname === '/api/v1/person-merges/1') return Response.json({ ...merges[0], participants: merges[0].labels.participants, rows: [], splits: [], review_candidates: [] });
+    if (url.pathname.endsWith('/profile/history')) return Response.json({ ...emptyProfile(person()), observations: [], merged_in: merges.map(item => ({ merge_id: item.merge.id, participant_id: item.labels.members[0].participant_id, merged_at: when, member: item.labels.members[0], identifiers: [] })) });
+    throw new Error(`unexpected ${url.pathname}`);
+  });
+  render(ProfileHistoryDialog, { client, personID: 7, onClose: vi.fn() });
+  await screen.findByRole('button', { name: /^Open Sender 99 merged into/ });
+  expect(screen.getAllByRole('button', { name: /^Open the merge that brought in sender/ })).toHaveLength(101);
+  await fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+  await screen.findByRole('button', { name: /^Open Sender 100 merged into/ });
+  expect(screen.getAllByRole('button', { name: /^Open the merge that brought in sender/ })).toHaveLength(101);
+  await fireEvent.click(screen.getByRole('button', { name: 'Open the merge that brought in sender0@example.org' }));
+  expect(await screen.findByRole('dialog', { name: 'Sender 0 merged into Current person' })).toBeDefined();
 });

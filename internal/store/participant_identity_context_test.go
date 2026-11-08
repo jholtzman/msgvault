@@ -34,13 +34,13 @@ func TestGetParticipantIdentityContext(t *testing.T) {
 
 	details, err := st.GetParticipantIdentityContext(ctx, []int64{root, alias, phone, alias, 0, -1})
 	require.NoError(err)
-	assert.ElementsMatch([]store.ParticipantIdentityMember{
-		{ParticipantID: root, DisplayName: "Root Example", Email: "root@example.com"},
+	assert.ElementsMatch([]store.PersonClusterMember{
+		{ParticipantID: root, DisplayName: "Root Example", Email: "root@example.com", NormalizedValue: "root@example.com"},
 		{ParticipantID: alias, DisplayName: "Alias Example"},
-		{ParticipantID: phone, DisplayName: "Phone Example", Phone: "+15550100001"},
+		{ParticipantID: phone, DisplayName: "Phone Example", Phone: "+15550100001", NormalizedValue: "+15550100001"},
 	}, details.Members)
 	assert.Contains(details.Identifiers, store.ParticipantIdentifierContext{
-		ParticipantID: alias, Type: "beeper", Value: key,
+		ParticipantID: alias, Type: "beeper", Value: key, DisplayValue: key,
 		ServiceSlug: "whatsapp", ServiceLabel: "WhatsApp",
 		ScopeKind: "account", ScopeValue: "local-whatsapp_ba_example",
 	})
@@ -62,7 +62,7 @@ func TestGetParticipantIdentityContextBatchesAndExcludesOutsideLinks(t *testing.
 	require := require.New(t)
 	st := testutil.NewTestStore(t)
 	ids := make([]int64, 302)
-	wantMembers := make([]store.ParticipantIdentityMember, len(ids))
+	wantMembers := make([]store.PersonClusterMember, len(ids))
 	wantIdentifiers := make([]store.ParticipantIdentifierContext, len(ids))
 	for i := range ids {
 		key := fmt.Sprintf("beeper-user-%d", i)
@@ -70,8 +70,8 @@ func TestGetParticipantIdentityContextBatchesAndExcludesOutsideLinks(t *testing.
 		id, err := st.EnsureParticipantByIdentifier("beeper", key, name)
 		require.NoError(err)
 		ids[i] = id
-		wantMembers[i] = store.ParticipantIdentityMember{ParticipantID: id, DisplayName: name}
-		wantIdentifiers[i] = store.ParticipantIdentifierContext{ParticipantID: id, Type: "beeper", Value: key}
+		wantMembers[i] = store.PersonClusterMember{ParticipantID: id, DisplayName: name}
+		wantIdentifiers[i] = store.ParticipantIdentifierContext{ParticipantID: id, Type: "beeper", Value: key, DisplayValue: key, NormalizedValue: key}
 	}
 	outside, err := st.EnsureParticipant("outside@example.com", "Outside Example", "example.com")
 	require.NoError(err)
@@ -89,4 +89,17 @@ func TestGetParticipantIdentityContextBatchesAndExcludesOutsideLinks(t *testing.
 		{ParticipantA: ids[0], ParticipantB: ids[301], OriginKind: "manual"},
 		{ParticipantA: ids[300], ParticipantB: ids[301], OriginKind: "manual"},
 	}, details.Links)
+}
+
+func TestGetParticipantIdentityContextClassifiesUnscopedPhone(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+	st := testutil.NewTestStore(t)
+	id, err := st.EnsurePhoneParticipantContext(t.Context(), "+16045550103", "Phone Example")
+	require.NoError(err)
+	details, err := st.GetParticipantIdentityContext(t.Context(), []int64{id})
+	require.NoError(err)
+	require.Len(details.Identifiers, 1)
+	assert.Equal("phone", details.Identifiers[0].ServiceSlug)
+	assert.Equal("+16045550103", details.Identifiers[0].NormalizedValue)
 }

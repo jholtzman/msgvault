@@ -9,9 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/msgvault/internal/activity"
@@ -364,6 +366,13 @@ func TestPersonMerge_Inspect(t *testing.T) {
 	require.NoError(err)
 	require.Len(list, 1)
 	assert.Equal(f.merge.Merge.ID, list[0].Merge.ID)
+	assert.False(list[0].Labels.Incomplete)
+	require.Len(list[0].Labels.Profiles, 2)
+	assert.Equal(new("Survivor"), list[0].Labels.Profiles[0].DisplayName)
+	assert.Equal(new("Absorbed"), list[0].Labels.Profiles[1].DisplayName)
+	assert.Len(list[0].Labels.Participants, 3)
+	assert.Len(list[0].Labels.Members, 3)
+
 	assert.Equal(3, list[0].ParticipantCount)
 	assert.Equal(1, list[0].SplitCount)
 	assert.Equal(1, list[0].PendingCandidateCount)
@@ -427,6 +436,66 @@ func TestPersonMerge_Snapshot(t *testing.T) {
 	require.NoError(t, err)
 	_, err = f.store.GetPersonMergeSnapshotContext(ctx, f.merge.Merge.ID)
 	require.ErrorIs(t, err, store.ErrPersonMergeSnapshotCorrupt)
+}
+
+func TestPersonMerge_IdentityReadFailureKeepsRecordedNames(t *testing.T) {
+	for _, failure := range []string{"identifiers", "snapshot"} {
+		t.Run(failure, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+			f := newPersonMergeInspectionFixture(t, "identity-read-failure")
+			var err error
+			if failure == "identifiers" {
+				testutil.SkipIfPostgres(t, "injects an identity-read failure through the SQLite authorizer")
+				f.store.DB().SetMaxOpenConns(1)
+				f.store.DB().SetMaxIdleConns(1)
+				var fail atomic.Bool
+				fail.Store(true)
+				t.Cleanup(func() { fail.Store(false) })
+				conn, connErr := f.store.DB().Conn(t.Context())
+				require.NoError(connErr)
+				err = conn.Raw(func(driverConn any) error {
+					sqliteConn, ok := driverConn.(*sqlite3.SQLiteConn)
+					require.True(ok)
+					sqliteConn.RegisterAuthorizer(func(action int, table, _, _ string) int {
+						if fail.Load() && action == sqlite3.SQLITE_READ && table == "participant_identifiers" {
+							return sqlite3.SQLITE_DENY
+						}
+						return sqlite3.SQLITE_OK
+					})
+					return nil
+				})
+				require.NoError(conn.Close())
+			} else {
+				_, err = f.store.DB().ExecContext(t.Context(), f.store.Rebind(`UPDATE person_merges SET snapshot_blob = ? WHERE id = ?`), []byte("corrupt"), f.merge.Merge.ID)
+			}
+			require.NoError(err)
+			listed, err := f.store.ListPersonMergesContext(t.Context(), f.merge.Person.ID)
+			require.NoError(err)
+			require.Len(listed, 1)
+			detail, err := f.store.GetPersonMergeContext(t.Context(), f.merge.Merge.ID)
+			require.NoError(err)
+			assert.NotEmpty(listed[0].Labels.Participants)
+			assert.NotEmpty(detail.Participants)
+			history, historyErr := f.store.GetPersonProfileHistoryContext(t.Context(), f.merge.Person.ID)
+			if failure == "identifiers" {
+				require.Error(historyErr)
+			} else {
+				require.NoError(historyErr)
+				assert.NotEmpty(history.MergedIn)
+			}
+			for _, labels := range []store.PersonMergeLabels{listed[0].Labels, detail.Labels} {
+				assert.True(labels.Incomplete)
+				if failure == "identifiers" {
+					assert.Len(labels.Profiles, 2)
+					assert.Empty(labels.Members)
+				} else {
+					assert.Empty(labels.Profiles)
+					assert.NotEmpty(labels.Members)
+				}
+			}
+		})
+	}
 }
 
 func TestPersonMerge_CandidateDecisionAcceptedAndIdempotent(t *testing.T) {
@@ -2509,4 +2578,25 @@ func TestMergePersons_MovesBriefEnrollmentToSurvivor(t *testing.T) {
 			assert.Equal(test.wantAction, action)
 		})
 	}
+}
+
+func TestPersonMerge_DetailLabelsCurrentBindings(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+	f := newPersonMergeInspectionFixture(t, "detail-current-labels")
+	ctx := t.Context()
+	added, err := f.store.EnsureParticipant("Later@Example.org", "Later sender", "example.org")
+	require.NoError(err)
+	current, err := f.store.GetPersonContext(ctx, f.merge.Person.ID)
+	require.NoError(err)
+	_, err = f.store.LinkParticipants(current.ParticipantIDs[0], added)
+	require.NoError(err)
+	detail, err := f.store.GetPersonMergeContext(ctx, f.merge.Merge.ID)
+	require.NoError(err)
+	assert.Contains(detail.Labels.Members, store.PersonClusterMember{ParticipantID: added, DisplayName: "Later sender", Email: "Later@Example.org", NormalizedValue: "later@example.org"})
+	assert.Contains(detail.Participants, store.PersonMergeParticipant{MergeID: f.merge.Merge.ID, ParticipantID: added, OriginSide: "survivor"})
+	for _, profile := range detail.Labels.Profiles {
+		assert.NotContains(profile.ParticipantIDs, added)
+	}
+	assert.False(detail.Labels.Incomplete)
 }

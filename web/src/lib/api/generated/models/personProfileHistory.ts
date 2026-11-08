@@ -8,6 +8,7 @@ import type { PersonCategory } from "./personCategory";
 import type { PersonContactPoint } from "./personContactPoint";
 import type { PersonDate } from "./personDate";
 import type { PersonMedia } from "./personMedia";
+import type { PersonMergedInParticipant } from "./personMergedInParticipant";
 import type { PersonName } from "./personName";
 
 export interface PersonProfileHistory {
@@ -16,6 +17,7 @@ export interface PersonProfileHistory {
   contact_points: PersonContactPoint[];
   dates: PersonDate[];
   media: PersonMedia[];
+  merged_in: PersonMergedInParticipant[];
   names: PersonName[];
   observations: ParticipantContactObservation[];
   person: Person;

@@ -528,30 +528,58 @@ describe('SourcesWorkspace', () => {
   it('opens source setup from the header of a populated workspace', async () => {
     render(SourcesWorkspace, { client: createCaptureClient(api([source()]), []) });
     await screen.findByRole('table', { name: 'Sources' });
-    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
-    expect(within(screen.getByRole('dialog', { name: 'Add source' })).getByText('msgvault add-account user@example.com')).toBeDefined();
+    await fireEvent.click(screen.getByRole('button', { name: 'Add source…' }));
+    expect(within(screen.getByRole('dialog', { name: 'Add source' })).getByRole('list', { name: 'Source kinds' })).toBeDefined();
   });
 
-  it('offers one source setup action after an empty workspace loads', async () => {
+  it('opens sync history from an empty workspace', async () => {
     const onOpenOperations = vi.fn();
-    let release!: () => void;
-    const pending = new Promise<void>(resolve => { release = resolve; });
-    const fetchFn = api([]);
-    render(SourcesWorkspace, { client: createCaptureClient(async (...args) => { await pending; return fetchFn(...args); }, []), onOpenOperations });
-    try {
-      await screen.findByText('Loading…');
-      expect(screen.queryByRole('button', { name: 'Add source' })).toBeNull();
-    } finally {
-      release();
-    }
-    await screen.findByText('No sources yet');
-    expect(screen.getByText('Add an account or import an export to start your archive.')).toBeDefined();
-    expect(screen.getAllByRole('button', { name: 'Add source' })).toHaveLength(1);
-    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
-    expect(within(screen.getByRole('dialog', { name: 'Add source' })).getByText('msgvault add-account user@example.com')).toBeDefined();
-    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add source' })).getByRole('button', { name: 'Close' }));
+    render(SourcesWorkspace, { client: createCaptureClient(api([]), []), onOpenOperations });
+    await screen.findByText('Add your first source');
     await fireEvent.click(screen.getByRole('button', { name: 'Sync history' }));
     expect(onOpenOperations).toHaveBeenCalledOnce();
+  });
+
+  it('offers the inline source picker after loading an empty workspace', async () => {
+    let release!: (response: Response) => void;
+    const pending = new Promise<Response>(resolve => release = resolve);
+    render(SourcesWorkspace, { client: createCaptureClient(api([], url => url.pathname.endsWith('/sources/status') ? pending : undefined), []) });
+    expect(await screen.findByText('Loading…')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Add source…' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Source kinds' })).toBeNull();
+    release(Response.json({ sources: [] }));
+    expect(await screen.findByRole('list', { name: 'Source kinds' })).toBeDefined();
+    await fireEvent.click(screen.getByRole('button', { name: /^Gmail Includes/ }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add Gmail' }));
+    await fireEvent.click(dialog.getByRole('button', { name: 'Back to Add source' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getAllByRole('list', { name: 'Source kinds' })).toHaveLength(1);
+  });
+
+  it('keeps a first-run step and its filled field through a status poll that finds the new source', async () => {
+    let reads = 0;
+    render(SourcesWorkspace, { client: createCaptureClient(api([], url => {
+      if (url.pathname.endsWith('/sources/status') && ++reads > 1) return Response.json({ sources: [source()] });
+      return undefined;
+    }), []) });
+    await fireEvent.click(await screen.findByRole('button', { name: /^Gmail Includes/ }));
+    const email = within(screen.getByRole('dialog', { name: 'Add Gmail' })).getByLabelText('Email address');
+    await fireEvent.input(email, { target: { value: 'you@gmail.com' } });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(await screen.findByRole('table', { name: 'Sources' })).toBeDefined();
+    expect(screen.queryByText('Add your first source')).toBeNull();
+    expect(within(screen.getByRole('dialog', { name: 'Add Gmail' })).getByLabelText('Email address')).toBe(email);
+    expect((email as HTMLInputElement).value).toBe('you@gmail.com');
+  });
+
+  it('opens existing CardDAV setup and closes the picker', async () => {
+    const onOpenSettings = vi.fn();
+    render(SourcesWorkspace, { client: createCaptureClient(api([source()]), []), onOpenSettings });
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add source…' }));
+    expect(screen.getByRole('dialog', { name: 'Add source' })).toBeDefined();
+    await fireEvent.click(await screen.findByRole('button', { name: /^Contacts Google/ }));
+    expect(onOpenSettings).toHaveBeenCalledWith('carddav');
+    expect(screen.queryByRole('dialog', { name: 'Add source' })).toBeNull();
   });
 
   it('keeps polling through idle races until the accepted run completes', async () => {
@@ -770,7 +798,7 @@ describe('SourcesWorkspace', () => {
     await tick();
     await Promise.all(requests);
     expect(events).toEqual([]);
-    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Add source…' }));
     expect(screen.getByRole('dialog', { name: 'Add source' })).toBeDefined();
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add source' })).getByRole('button', { name: 'Close' }));
 
@@ -1128,7 +1156,7 @@ it.each(['error', 'timeout'])('recovers a contacts-only load %s without claiming
     if (failure === 'timeout') expect(within(alert).queryByText('Details')).toBeNull();
     if (failure === 'error') expect(alert.textContent).toContain('Contacts upstream unavailable');
     expect(screen.queryByText('No sources yet')).toBeNull();
-    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Add source…' }));
     expect(screen.getByRole('dialog', { name: 'Add source' })).toBeDefined();
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add source' })).getByRole('button', { name: 'Close' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));

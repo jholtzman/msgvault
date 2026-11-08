@@ -202,8 +202,19 @@ func daemonCLIArgsFromCobra(cmd *cobra.Command, args []string) ([]string, error)
 		runArgs = appendDaemonCLIFlag(runArgs, flag)
 	}
 
-	runArgs = append(runArgs, args...)
-	return runArgs, nil
+	return appendDaemonCLIPositionals(runArgs, cmd, args), nil
+}
+
+// appendDaemonCLIPositionals appends args, restoring a "--" the user typed so
+// a positional such as "-sender@example.org" is not reparsed as a flag.
+func appendDaemonCLIPositionals(runArgs []string, cmd *cobra.Command, args []string) []string {
+	dash := cmd.ArgsLenAtDash()
+	if dash < 0 || dash > len(args) {
+		return append(runArgs, args...)
+	}
+	runArgs = append(runArgs, args[:dash]...)
+	runArgs = append(runArgs, "--")
+	return append(runArgs, args[dash:]...)
 }
 
 func daemonCLICommandPath(cmd *cobra.Command) []string {

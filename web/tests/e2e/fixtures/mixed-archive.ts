@@ -63,20 +63,6 @@ type MixedArchiveFixture = {
   firstPage: ExploreHTTPResponse;
 };
 
-export type CapturedTrackingRequest = {
-  method: 'GET' | 'PUT';
-  path: string;
-  includeSensitive?: boolean;
-  tracked?: boolean;
-};
-
-
-type InstalledMixedArchive = MixedArchiveFixture & {
-  trackingRequests: CapturedTrackingRequest[];
-  failNextTrackingMutation: () => void;
-  failNextTrackingRead: () => void;
-};
-
 let fixturePromise: Promise<MixedArchiveFixture> | undefined;
 
 export function loadMixedArchive(): Promise<MixedArchiveFixture> {
@@ -107,13 +93,10 @@ export function loadMixedArchive(): Promise<MixedArchiveFixture> {
   return fixturePromise;
 }
 
-export async function installMixedArchive(page: Page): Promise<InstalledMixedArchive> {
+export async function installMixedArchive(page: Page): Promise<MixedArchiveFixture> {
   const fixture = await loadMixedArchive();
-  const trackingRequests: CapturedTrackingRequest[] = [];
   let tracked = false;
   let trackedAt: string | null = null;
-  let trackingMutationFailure = false;
-  let trackingReadFailure = false;
   await page.route('**/api/session', sessionRoute);
   await page.route('**/api/v1/settings', (route) =>
     route.fulfill({
@@ -285,17 +268,6 @@ export async function installMixedArchive(page: Page): Promise<InstalledMixedArc
   await page.route('**/api/v1/people/42/tracking', async (route) => {
     const request = route.request();
     if (request.method() === 'GET') {
-      trackingRequests.push({ method: 'GET', path: '/api/v1/people/42/tracking' });
-      if (trackingReadFailure) {
-        trackingReadFailure = false;
-        return route.fulfill({
-          status: 503,
-          json: {
-            error: 'tracking_unavailable',
-            message: 'forbidden-private-credential',
-          },
-        });
-      }
       return route.fulfill({ json: { person_id: 42, tracked, tracked_at: trackedAt } });
     }
     if (request.method() === 'PUT') {
@@ -303,19 +275,8 @@ export async function installMixedArchive(page: Page): Promise<InstalledMixedArc
       if (!body || typeof body.tracked !== 'boolean' || Object.keys(body).length !== 1) {
         return route.fulfill({ status: 400, json: { error: 'bad_request', message: 'Invalid synthetic body.' } });
       }
-      trackingRequests.push({ method: 'PUT', path: '/api/v1/people/42/tracking', tracked: body.tracked });
       tracked = body.tracked;
       trackedAt = tracked ? FIXTURE_TIME : null;
-      if (trackingMutationFailure) {
-        trackingMutationFailure = false;
-        return route.fulfill({
-          status: 503,
-          json: {
-            error: 'tracking_unavailable',
-            message: 'forbidden-private-credential',
-          },
-        });
-      }
       return route.fulfill({ json: { person_id: 42, tracked, tracked_at: trackedAt } });
     }
     return route.fulfill({
@@ -326,11 +287,6 @@ export async function installMixedArchive(page: Page): Promise<InstalledMixedArc
   await page.route('**/api/v1/person-fact-targets*', (route) => {
     const url = new URL(route.request().url());
     const includeSensitive = url.searchParams.get('include_sensitive') === 'true';
-    trackingRequests.push({
-      method: 'GET',
-      path: '/api/v1/person-fact-targets',
-      includeSensitive,
-    });
     const common = {
       kind: 'attribute',
       revision: 'forbidden-target-revision',
@@ -602,16 +558,7 @@ export async function installMixedArchive(page: Page): Promise<InstalledMixedArc
   await stubOperationStatus(page);
   await page.route('**/api/v1/sources/status', (route) => route.fulfill({ json: { sources: [] } }));
   await page.route('**/api/v1/deletions', (route) => route.fulfill({ json: { manifests: [] } }));
-  return {
-    ...fixture,
-    trackingRequests,
-    failNextTrackingMutation(): void {
-      trackingMutationFailure = true;
-    },
-    failNextTrackingRead(): void {
-      trackingReadFailure = true;
-    },
-  };
+  return fixture;
 }
 
 type IdentityMatchCandidate = IdentityMatchCandidate;
@@ -1223,9 +1170,11 @@ function reviewMerge(): PersonMerge {
 function reviewMergeDetail(splitCompleted = false): PersonMergeDetail {
   return {
     merge: reviewMerge(),
+    labels: { ...reviewMergeSummary(splitCompleted).labels, participants: undefined, identifiers: [701, 702, 901].map(participant_id => ({ participant_id, type: 'email', value: `person${participant_id}@example.org`, normalized_value: `person${participant_id}@example.org`, display_value: '', service_slug: 'email', service_label: 'Email', scope_kind: '', scope_value: '' })) },
     participants: [
       { merge_id: 41, participant_id: 901, origin_side: 'absorbed', ...(splitCompleted ? { split_id: 55 } : {}) },
       { merge_id: 41, participant_id: 701, origin_side: 'survivor' },
+      { merge_id: 41, participant_id: 702, origin_side: 'survivor' },
     ],
     rows: [
       {
@@ -1248,7 +1197,13 @@ function reviewMergeDetail(splitCompleted = false): PersonMergeDetail {
 function reviewMergeSummary(splitCompleted = false): PersonMergeSummary {
   return {
     merge: reviewMerge(),
-    participant_count: 2,
+    labels: {
+      profiles: [{ id: 7, display_name: 'Synthetic One', participant_ids: [701, 702] }, { id: 9, display_name: 'Synthetic Two', participant_ids: [901] }],
+      participants: [{ merge_id: 41, participant_id: 901, origin_side: 'absorbed', ...(splitCompleted ? { split_id: 55 } : {}) }, { merge_id: 41, participant_id: 701, origin_side: 'survivor' }, { merge_id: 41, participant_id: 702, origin_side: 'survivor' }],
+      members: [701, 702, 901].map(participant_id => ({ participant_id })), incomplete: false,
+      identifiers: [701, 702, 901].map(participant_id => ({ participant_id, type: 'email', value: `person${participant_id}@example.org`, normalized_value: `person${participant_id}@example.org`, display_value: '', service_slug: 'email', service_label: 'Email', scope_kind: '', scope_value: '' })),
+    },
+    participant_count: 3,
     pending_candidate_count: 0,
     row_action_counts: { copied: 1 },
     row_count: 1,

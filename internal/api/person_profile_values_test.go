@@ -269,6 +269,14 @@ func TestGetPersonProfileHistoryIsASeparateEndpoint(t *testing.T) {
 	assert := assert.New(t)
 	server, st := newProfileTestServer(t)
 	personID := seedAPIPerson(t, st)
+	participant, err := st.EnsureParticipant("merged@example.org", "Merged sender", "example.org")
+	require.NoError(err)
+	absorbed, _, err := st.CreatePersonFromParticipant(participant)
+	require.NoError(err)
+	survivor, err := st.GetPersonContext(t.Context(), personID)
+	require.NoError(err)
+	merged, err := st.MergePersonsContext(t.Context(), store.PersonMergeRequest{SurvivorID: personID, AbsorbedID: absorbed.ID, ExpectedSurvivorRevision: survivor.Revision, ExpectedAbsorbedRevision: absorbed.Revision, IdempotencyKey: "profile-http-merge", Actor: "test"})
+	require.NoError(err)
 
 	recorder := doRequest(t, server, http.MethodGet, personProfilePath(personID)+"/history", nil, nil)
 	require.Equal(http.StatusOK, recorder.Code, recorder.Body.String())
@@ -276,6 +284,10 @@ func TestGetPersonProfileHistoryIsASeparateEndpoint(t *testing.T) {
 	require.NoError(json.Unmarshal(recorder.Body.Bytes(), &history), recorder.Body.String())
 	assert.Equal(personID, history.Person.ID)
 	assert.NotNil(history.Observations, "the observations field is always present, even when empty")
+	require.Len(history.MergedIn, 1)
+	assert.Equal(merged.Merge.ID, history.MergedIn[0].MergeID)
+	assert.Equal(participant, history.MergedIn[0].ParticipantID)
+	assert.Equal("merged@example.org", history.MergedIn[0].Member.Email)
 }
 
 func TestProfileEndpointsRejectUnknownPersonAndBadID(t *testing.T) {

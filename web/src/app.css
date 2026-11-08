@@ -101,3 +101,15 @@ h3 {
 .boot-screen p[role='alert'] {
   color: var(--text-danger);
 }
+
+/* A pair of related short fields: equal columns 12 apart, stacked 16 apart
+ * on a phone. */
+.form-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-pane) var(--space-box);
+}
+
+@media (max-width: 640px) {
+  .form-pair { grid-template-columns: minmax(0, 1fr); }
+}

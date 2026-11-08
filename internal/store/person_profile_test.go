@@ -301,3 +301,61 @@ func seedFullProfile(t *testing.T, st *store.Store, personID int64) {
 	})
 	require.NoError(err)
 }
+
+func TestPersonProfileHistoryMergedInSpansPagesAndFollowsBindings(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	st := storetest.New(t).Store
+	ctx := t.Context()
+	current := mustPromotedPerson(ctx, t, st, "history-owner@example.org", "History owner")
+	service, _, err := st.EnsureCommunicationServiceContext(ctx, store.CommunicationServiceInput{Slug: "custom-chat", DisplayLabel: "Custom chat", ScopePolicy: store.ScopePolicyOptional, Normalization: store.NormalizationStripAtLower, NormalizationVersion: 1})
+	require.NoError(err)
+	var firstParticipant, lastParticipant, firstMerge int64
+	for i := range 101 {
+		var absorbed *store.Person
+		if i == 0 {
+			id, err := st.EnsureParticipantByIdentifier("handle", "@Reader", "Reader")
+			require.NoError(err)
+			require.NoError(st.ClassifyParticipantIdentifierServiceContext(ctx, "handle", "@Reader", &service.ID, new("server"), new("example.org")))
+			absorbed, _, err = st.CreatePersonFromParticipant(id)
+			require.NoError(err)
+			firstParticipant = id
+		} else {
+			absorbed = mustPromotedPerson(ctx, t, st, "merged-"+strconv.Itoa(i)+"@example.org", "Merged sender")
+		}
+		lastParticipant = absorbed.ParticipantIDs[0]
+		result, err := st.MergePersonsContext(ctx, store.PersonMergeRequest{SurvivorID: current.ID, AbsorbedID: absorbed.ID, ExpectedSurvivorRevision: current.Revision, ExpectedAbsorbedRevision: absorbed.Revision, IdempotencyKey: "profile-merge-" + strconv.Itoa(i), Actor: "test"})
+		require.NoError(err)
+		current = &result.Person
+		if i == 0 {
+			firstMerge = result.Merge.ID
+		}
+	}
+	page, err := st.ListPersonMergesPageContext(ctx, current.ID, 100, 0)
+	require.NoError(err)
+	require.Len(page, 100)
+	history, err := st.GetPersonProfileHistoryContext(ctx, current.ID)
+	require.NoError(err)
+	require.Len(history.MergedIn, 101)
+	assert.Equal(firstMerge, history.MergedIn[100].MergeID)
+	assert.Equal(firstParticipant, history.MergedIn[100].ParticipantID)
+	assert.Contains(history.MergedIn[100].Identifiers, store.ParticipantIdentifierContext{ParticipantID: firstParticipant, Type: "handle", Value: "@Reader", DisplayValue: "@Reader", NormalizedValue: "reader", ServiceSlug: "custom-chat", ServiceLabel: "Custom chat", ScopeKind: "server", ScopeValue: "example.org"})
+
+	destination := mustPromotedPerson(ctx, t, st, "history-destination@example.org", "Destination")
+	carried, err := st.MergePersonsContext(ctx, store.PersonMergeRequest{SurvivorID: destination.ID, AbsorbedID: current.ID, ExpectedSurvivorRevision: destination.Revision, ExpectedAbsorbedRevision: current.Revision, IdempotencyKey: "profile-carried", Actor: "test"})
+	require.NoError(err)
+	history, err = st.GetPersonProfileHistoryContext(ctx, destination.ID)
+	require.NoError(err)
+	require.Len(history.MergedIn, 102)
+	for _, item := range history.MergedIn {
+		assert.Equal(carried.Merge.ID, item.MergeID)
+	}
+	_, err = st.SplitPersonMergeContext(ctx, store.PersonSplitRequest{SourcePersonID: destination.ID, MergeID: carried.Merge.ID, ParticipantIDs: []int64{lastParticipant}, ExpectedSourceRevision: carried.Person.Revision, IdempotencyKey: "profile-split", Actor: "test"})
+	require.NoError(err)
+	history, err = st.GetPersonProfileHistoryContext(ctx, destination.ID)
+	require.NoError(err)
+	require.Len(history.MergedIn, 101)
+	for _, item := range history.MergedIn {
+		assert.NotEqual(lastParticipant, item.ParticipantID)
+	}
+}
