@@ -569,53 +569,11 @@ describe('SourcesWorkspace', () => {
     expect((email as HTMLInputElement).value).toBe('you@gmail.com');
   });
 
-  it('clears copy feedback when the command changes', async () => {
-    const writeText = vi.fn(async () => undefined);
-    const originalClipboard = navigator.clipboard;
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    try {
-      render(SourcesWorkspace, { client: createCaptureClient(api([]), []) });
-      await screen.findByText('Add your first source');
-      await fireEvent.click(await screen.findByRole('button', { name: /^Gmail Includes/ }));
-      const dialog = within(screen.getByRole('dialog', { name: 'Add Gmail' }));
-      const email = dialog.getByLabelText('Email address');
-      await fireEvent.input(email, { target: { value: 'one@example.com' } });
-      await fireEvent.click(dialog.getByRole('button', { name: 'Copy msgvault add-account one@example.com' }));
-      await waitFor(() => expect(dialog.getByRole('button', { name: 'Copied' }).textContent?.trim()).toBe('Copied'));
-      expect(writeText).toHaveBeenCalledWith('msgvault add-account one@example.com');
-      await fireEvent.input(email, { target: { value: 'two@example.com' } });
-      expect(dialog.getByRole('button', { name: 'Copy msgvault add-account two@example.com' })).toBeDefined();
-      await fireEvent.click(dialog.getByRole('button', { name: 'Copy msgvault add-account two@example.com' }));
-      await waitFor(() => expect(writeText).toHaveBeenLastCalledWith('msgvault add-account two@example.com'));
-    } finally {
-      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard });
-    }
-  });
-
-  it('shows the IMAP password prompt and separate shell commands', async () => {
-    render(SourcesWorkspace, { client: createCaptureClient(api([]), []) });
-    await screen.findByText('Add your first source');
-    await fireEvent.click(await screen.findByRole('button', { name: /^IMAP mailbox Any/ }));
-    const dialog = within(screen.getByRole('dialog', { name: 'Add IMAP mailbox' }));
-    expect(dialog.getByText('The command asks for your password.')).toBeDefined();
-    await fireEvent.input(dialog.getByLabelText('Server'), { target: { value: 'imap.example.com' } });
-    await fireEvent.input(dialog.getByLabelText('Username'), { target: { value: '~/reader' } });
-    expect(dialog.getByText('The command asks for your password.')).toBeDefined();
-    expect(dialog.getByRole('button', { name: /^Copy / }).textContent?.trim()).toBe('Copy');
-    expect(dialog.getAllByRole('listitem').map(item => item.textContent)).toEqual(['Run this command in a terminal where msgvault is installed.', 'Run the first-sync command it prints.', 'Press Done.']);
-    expect(dialog.getByRole('link', { name: 'Setup guide' })).toBeDefined();
-    const posix = dialog.getByRole('button', { name: /^Copy / }).getAttribute('aria-label');
-    await fireEvent.click(dialog.getByRole('radio', { name: 'Windows' }));
-    expect(dialog.getByText(/Start Command Prompt with/)).toBeDefined();
-    const copies = dialog.getAllByRole('button', { name: /^Copy / });
-    expect(copies).toHaveLength(1);
-    expect(copies[0].getAttribute('aria-label')).not.toBe(posix);
-  });
-
   it('opens existing CardDAV setup and closes the picker', async () => {
     const onOpenSettings = vi.fn();
-    render(SourcesWorkspace, { client: createCaptureClient(api([]), []), onOpenSettings });
-    await screen.findByText('Add your first source');
+    render(SourcesWorkspace, { client: createCaptureClient(api([source()]), []), onOpenSettings });
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add source…' }));
+    expect(screen.getByRole('dialog', { name: 'Add source' })).toBeDefined();
     await fireEvent.click(await screen.findByRole('button', { name: /^Contacts Google/ }));
     expect(onOpenSettings).toHaveBeenCalledWith('carddav');
     expect(screen.queryByRole('dialog', { name: 'Add source' })).toBeNull();

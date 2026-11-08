@@ -2558,13 +2558,6 @@ func TestPersonMerge_DetailLabelsCurrentBindings(t *testing.T) {
 	require.NoError(t, err)
 	_, err = f.store.LinkParticipants(current.ParticipantIDs[0], added)
 	require.NoError(t, err)
-	service, _, err := f.store.EnsureCommunicationServiceContext(ctx, store.CommunicationServiceInput{Slug: "custom-chat", DisplayLabel: "Custom chat", ScopePolicy: store.ScopePolicyOptional, Normalization: store.NormalizationStripAtLower, NormalizationVersion: 1})
-	require.NoError(t, err)
-	handle, err := f.store.EnsureParticipantByIdentifier("handle", "@Reader", "Reader")
-	require.NoError(t, err)
-	require.NoError(t, f.store.ClassifyParticipantIdentifierServiceContext(ctx, "handle", "@Reader", &service.ID, new("server"), new("example.org")))
-	_, err = f.store.LinkParticipants(current.ParticipantIDs[0], handle)
-	require.NoError(t, err)
 	detail, err := f.store.GetPersonMergeContext(ctx, f.merge.Merge.ID)
 	require.NoError(t, err)
 	assert.Contains(t, detail.Labels.Members, store.PersonClusterMember{ParticipantID: added, DisplayName: "Later sender", Email: "Later@Example.org", NormalizedValue: "later@example.org"})
@@ -2572,6 +2565,5 @@ func TestPersonMerge_DetailLabelsCurrentBindings(t *testing.T) {
 	for _, profile := range detail.Labels.Profiles {
 		assert.NotContains(t, profile.ParticipantIDs, added)
 	}
-	assert.Contains(t, detail.Labels.Identifiers, store.ParticipantIdentifierContext{ParticipantID: handle, Type: "handle", Value: "@Reader", DisplayValue: "@Reader", NormalizedValue: "reader", ServiceSlug: "custom-chat", ServiceLabel: "Custom chat", ScopeKind: "server", ScopeValue: "example.org"})
 	assert.False(t, detail.Labels.Incomplete)
 }

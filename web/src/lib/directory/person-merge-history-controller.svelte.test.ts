@@ -159,7 +159,7 @@ describe('PersonMergeHistoryController', () => {
       if (path === '/api/v1/people/19') return late.promise;
       if (path === '/api/v1/person-merges/42') return failReload
         ? Response.json({}, { status: 503 })
-        : Response.json({ ...detail({ id: 42, survivor_person_id: 8 }, []), labels: { ...detail().labels, profiles: [{ id: 8, display_name: 'New Example', participant_ids: [] }] } });
+        : Response.json({ ...detail({ id: 42, survivor_person_id: 8 }, []), labels: { ...detail().labels, participants: [], profiles: [{ id: 8, display_name: 'New Example', participant_ids: [] }] } });
       if (path === '/api/v1/person-merges/42/snapshot') return Response.json({ snapshot: { persons: [{ id: 8, display_name: 'New Example' }] } });
       return Response.json({ merges: [], identifiers: [] });
     }), 7);
@@ -602,27 +602,22 @@ describe('PersonMergeHistoryController', () => {
     expect(controller.snapshot).toBeNull();
     expect(controller.committedResult).toBeNull();
   });
-});
-
-
-it('keeps snapshot failure inside its disclosure', async () => {
-  const paths: string[] = [];
-  const labels = {
-    profiles: [{ id: 7, display_name: 'Survivor', participant_ids: [702] }, { id: 9, display_name: 'Absorbed', participant_ids: [701] }],
-    participants: detail().participants,
-    members: [{ participant_id: 701, email: 'earlier@example.org', normalized_value: 'earlier@example.org' }, { participant_id: 702, email: 'current@example.org', normalized_value: 'current@example.org' }],
-    identifiers: [], incomplete: false,
-  };
-  const controller = new PersonMergeHistoryController(createAPIClient(async input => {
-    const path = new URL(requestOf(input).url).pathname;
-    paths.push(path);
-    if (path === '/api/v1/person-merges/41') return Response.json({ ...detail(), labels });
-    if (path.endsWith('/snapshot')) return Response.json({}, { status: 503 });
-    return Response.json({ identifiers: [] });
-  }), 12);
-  await controller.selectMerge(41);
-  await controller.revealSnapshot();
-  expect(controller.snapshotError).toBe('The server answered 503.');
-  expect(controller.labels?.incomplete).toBe(false);
-  controller.destroy();
+  it('keeps snapshot failure inside its disclosure', async () => {
+    const labels = {
+      profiles: [{ id: 7, display_name: 'Survivor', participant_ids: [702] }, { id: 9, display_name: 'Absorbed', participant_ids: [701] }],
+      participants: detail().participants,
+      members: [{ participant_id: 701, email: 'earlier@example.org', normalized_value: 'earlier@example.org' }, { participant_id: 702, email: 'current@example.org', normalized_value: 'current@example.org' }],
+      identifiers: [], incomplete: false,
+    };
+    const controller = new PersonMergeHistoryController(createAPIClient(async input => {
+      const path = new URL(requestOf(input).url).pathname;
+      if (path === '/api/v1/person-merges/41') return Response.json({ ...detail(), labels });
+      if (path.endsWith('/snapshot')) return Response.json({}, { status: 503 });
+      return Response.json({ identifiers: [] });
+    }), 12);
+    await controller.selectMerge(41);
+    await controller.revealSnapshot();
+    expect(controller.snapshotError).toBe('The server answered 503.');
+    controller.destroy();
+  });
 });

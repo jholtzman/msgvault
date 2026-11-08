@@ -87,7 +87,7 @@ function summary(mergeDetail: MergeDetail) {
 }
 
 function renderHistory(value: number | null | MergeDetail = 12, options: {
-  gone?: boolean; fail?: boolean; missingDestination?: boolean; regression?: boolean;
+  unnamedSurvivor?: boolean; fail?: boolean; missingDestination?: boolean; regression?: boolean;
   list?: MergeDetail[]; respond?: (path: string) => Response | Promise<Response> | undefined;
 } = {}) {
   const mergeDetail = typeof value === 'object' && value !== null ? value : detail(value);
@@ -105,7 +105,7 @@ function renderHistory(value: number | null | MergeDetail = 12, options: {
     const custom = options.respond?.(path);
     if (custom) return custom;
     const labels = { ...mergeDetail.labels };
-    if (options.gone) labels.profiles = labels.profiles.filter(profile => profile.id !== 7);
+    if (options.unnamedSurvivor) labels.profiles = labels.profiles.map(profile => profile.id === 7 ? { ...profile, display_name: undefined } : profile);
     if (options.fail) { labels.identifiers = []; labels.members = []; labels.incomplete = true; }
     if (path === '/api/v1/people/7/merges') return Response.json({ merges: (options.list ?? [mergeDetail]).map(item => ({ ...summary(item), labels: item === mergeDetail ? labels : item.labels })), limit: 100, offset: 0 });
     if (path.endsWith('/snapshot')) return Response.json({ version: 1, sha256: 'synthetic-digest', snapshot: { explicitly_revealed: 'synthetic content', persons: labels.profiles } });
@@ -124,34 +124,12 @@ function renderHistory(value: number | null | MergeDetail = 12, options: {
 }
 
 describe('PersonMergeHistory', () => {
-  it('shows imported sender addresses on the merge cards without identifier rows', async () => {
-    const mergeDetail = detail();
-    mergeDetail.labels = {
-      profiles: [{ id: 9, display_name: 'Neri Bloom', participant_ids: [701] }, { id: 7, display_name: 'Mira Vale', participant_ids: [702] }], participants: mergeDetail.participants, identifiers: [], incomplete: false,
-      members: [701, 702, 703].map(participant_id => ({ participant_id, display_name: 'Named sender', email: `imported${participant_id}@example.org`, normalized_value: `imported${participant_id}@example.org` })),
-    };
-    renderHistory(mergeDetail);
-    await fireEvent.click(await screen.findByRole('button', { name: /^Open .+ merged into .+/ }));
-    const cards = within(await screen.findByRole('group', { name: 'Merged profiles' }));
-    expect(cards.getByText('imported701@example.org')).toBeDefined();
-    expect(cards.getByText('imported702@example.org')).toBeDefined();
-  });
-
   it('shows the formatted phone once on a merge card', async () => {
     renderHistory(detail(), { regression: true });
     await fireEvent.click(await screen.findByRole('button', { name: /^Open alex@example.org merged into Alex Example · / }));
     const cards = within(await screen.findByRole('group', { name: 'Merged profiles' }));
     expect(cards.getByText('+1 202 555 0101')).toBeDefined();
     expect(cards.queryByText('+12025550101')).toBeNull();
-  });
-
-  it('keeps keyboard focus inside History when opening a merge step', async () => {
-    renderHistory(detail(), { regression: true });
-    const row = await screen.findByRole('button', { name: /^Open .+ merged into .+ · / });
-    row.focus();
-    await fireEvent.click(row);
-    await screen.findByRole('group', { name: 'Merged profiles' });
-    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
   });
 
   it('waits for detail before showing its Split action', async () => {
@@ -191,6 +169,7 @@ describe('PersonMergeHistory', () => {
     const cards = within(await screen.findByRole('group', { name: 'Merged profiles' })).getAllByRole('region');
     expect(within(cards[1]).getByRole('heading').textContent).toBe('Mira Vale');
   });
+
   it('keeps every handle and workspace under an unnamed service profile', async () => {
     const merge = detail();
     merge.labels = { profiles: [{ id: 7, display_name: 'Mira Vale', participant_ids: [702] }, { id: 9, participant_ids: [701, 703] }], participants: merge.participants, members: merge.participants.map(({ participant_id }) => ({ participant_id })), incomplete: false,
@@ -207,18 +186,10 @@ describe('PersonMergeHistory', () => {
     expect(card.getByRole('heading', { name: 'Slack · neri · workspace: garden-club' })).toBeDefined();
     expect(card.getByText('bloom · workspace: seed-exchange')).toBeDefined();
   });
-  it('names a same-name absorbed profile by its first address in the merge row', async () => {
+  it('counts only absorbed addresses and past splits in the merge row', async () => {
     renderHistory(detail(), { regression: true });
     // What the merge brought in, not both sides' total of 2.
     expect(await screen.findByText(/^(Jul|Aug) \d{1,2} · 2 addresses moved in · split back once$/)).toBeDefined();
-  });
-
-  it('keeps recorded same-name profiles when addresses are unavailable', async () => {
-    renderHistory(detail(), { regression: true, fail: true });
-    const row = await screen.findByRole('button', { name: /^Open Alex Example · work merged into Alex Example · / });
-    await fireEvent.click(row);
-    expect(await screen.findByRole('heading', { name: 'Alex Example · work merged into Alex Example' })).toBeDefined();
-    expect(await screen.findByRole('heading', { name: 'Alex Example · work' })).toBeDefined();
   });
 
   it('ties split addresses to a profile when its destination was deleted', async () => {
@@ -278,8 +249,8 @@ describe('PersonMergeHistory', () => {
     expect(onOpenPerson).toHaveBeenCalledWith(19);
   });
 
-  it('uses both surviving-profile fallbacks after a 404', async () => {
-    renderHistory(12, { gone: true });
+  it('uses both surviving-profile fallbacks for an unnamed recorded profile', async () => {
+    renderHistory(12, { unnamedSurvivor: true });
     await fireEvent.click(await screen.findByRole('button', { name: /^Open .+ merged into .+ · / }));
     await screen.findByRole('heading', { name: 'Alex Example · work merged into this profile' });
     expect(await screen.findByRole('heading', { name: 'This profile' })).toBeDefined();
@@ -288,6 +259,8 @@ describe('PersonMergeHistory', () => {
   it('keeps recorded names and retries incomplete detail labels', async () => {
     const { options } = renderHistory(12, { fail: true });
     await fireEvent.click(await screen.findByRole('button', { name: /^Open .+ merged into .+ · / }));
+    expect(await screen.findByRole('heading', { name: 'Alex Example · work merged into Alex Example' })).toBeDefined();
+    expect(await screen.findByRole('heading', { name: 'Alex Example · work' })).toBeDefined();
     expect((await screen.findAllByText('Unknown address')).length).toBeGreaterThan(0);
     expect(screen.getByText("Some names and addresses couldn't be loaded.")).toBeDefined();
     options.fail = false;

@@ -17,6 +17,7 @@ describe('provenance', () => {
   it('says since when the value became true on an earlier day than it was recorded', () => {
     expect(provenance('user', at, `${year}-11-01T09:00:00`).text).toBe('You · since Nov 1');
     expect(provenance('user', at, `${year}-11-05T09:00:00`).text).toBe('You · Nov 5');
+    expect(valueProvenance({ source: 'user', created_at: `${year}-11-01T09:00:00`, updated_at: at, active_from: `${year}-11-01T09:00:00` }).title).toMatch(/^Updated Nov 5[^\n]*\nValid from Nov 1[^\n]*\nRecorded Nov 1/);
   });
 
   it('names an act by you or msgvault and dates the act', () => {
@@ -39,6 +40,5 @@ describe('provenance', () => {
     if ('active_until' in interval) expect(line.title).toMatch(/Valid until Nov 6, \d{4}/);
     if ('superseded_at' in interval) expect(line.title).toMatch(/Replaced Nov 7, \d{4}/);
     expect(line.title).toContain('Actor: you\nReference: ref-1\nConfidence: 900');
-    expect(valueProvenance({ source: 'user', created_at: `${year}-11-01T09:00:00`, updated_at: at, active_from: `${year}-11-01T09:00:00` }).title).toMatch(/^Updated Nov 5[^\n]*\nValid from Nov 1[^\n]*\nRecorded Nov 1/);
   });
 });

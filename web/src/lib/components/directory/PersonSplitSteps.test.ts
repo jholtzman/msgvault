@@ -75,7 +75,7 @@ function result(exactReversal: boolean) {
 }
 
 describe('PersonSplitSteps', () => {
-  it('shows choices only after every source address is labeled and accepts the first click', async () => {
+  it('waits for the source profile before showing choices and accepts the first click', async () => {
     let release!: (value: Response) => void;
     const late = new Promise<Response>(resolve => { release = resolve; });
     const controller = new PersonMergeHistoryController(createAPIClient(async input => {
@@ -99,7 +99,7 @@ describe('PersonSplitSteps', () => {
     controller.destroy();
   });
 
-  it('names the actual source and selection in confirmation, then shows two fresh navigation actions with partial copy', async () => {
+  it('names the source and selection before submitting, then shows both people and partial-restore details', async () => {
     const fetchFn = vi.fn<typeof fetch>(async (input) => {
       const request = input instanceof Request ? input : new Request(input);
       const path = new URL(request.url).pathname;

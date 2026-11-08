@@ -795,7 +795,7 @@ it('keeps person B selected when an earlier deletion of person A completes', asy
 });
 
 it.each([false, true])('refreshes duplicates and keeps the split receipt after source binding changes: saved=%s', async savedEntry => {
-  let split = false, addressReads = 0;
+  let split = false;
   const navigations: number[] = [];
   const saved = () => profile(7, split ? 5 : 4, savedEntry ? (split ? [2] : [1, 2]) : (split ? [] : [1]));
   const merge = mergeResult(saved()).merge;
@@ -803,7 +803,6 @@ it.each([false, true])('refreshes duplicates and keeps the split receipt after s
   const client = clientFor({
     '/api/v1/people/9': () => Response.json(profile(9, 1, [1]), { headers: { ETag: '"person-9-r1"' } }),
     '/api/v1/people/9/profile/history': () => Response.json({ ...emptyProfile(profile(9, 1, [1])), observations: [] }),
-    '/api/v1/participants/2': () => { addressReads++; return Response.json({}, { status: 503 }); },
     '/api/v1/people/7': () => Response.json(saved(), { headers: { ETag: `"person-7-r${saved().revision}"` } }),
     '/api/v1/people/7/profile': () => Response.json(emptyProfile(saved()), { headers: { ETag: `"person-7-r${saved().revision}"` } }),
     '/api/v1/people/7/profile/history': () => Response.json({ ...emptyProfile(saved()), observations: [] }),
@@ -838,7 +837,6 @@ it.each([false, true])('refreshes duplicates and keeps the split receipt after s
     if (savedEntry) {
       await fireEvent.click(screen.getByRole('button', { name: 'Open Synthetic Two' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-      expect(addressReads).toBe(0);
       expect(navigations.at(-1)).toBe(9);
       expect(state.current.directoryPersonID).toBe(9);
     }

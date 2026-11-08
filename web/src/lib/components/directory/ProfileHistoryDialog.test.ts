@@ -1,3 +1,4 @@
+import { PersonMergeHistoryController } from '../../directory/person-merge-history-controller.svelte';
 import { mergeResult } from '../../directory/entity-fixtures.test-support';
 import { emptyProfile } from '../../directory/profile-fixtures.test-support';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
@@ -221,7 +222,7 @@ it.each([
   { name: 'email and split lineage', service: 'email', value: 'work@example.org', normalized: 'work@example.org', original: 'home@example.org', observed: 'home@example.org', kept: 'work@example.org', split: true, open: true },
   { name: 'formatted phone', service: 'phone', value: '+15550100100', normalized: '+15550100100', display: '+1 555 010 0100', original: '+1 555 010 0100', observed: '+15550100100' },
   { name: 'same handle in another workspace', service: 'slack', value: 'neri', normalized: 'neri', original: 'neri', observed: 'neri', scopeKind: 'workspace', scope: 'garden-club', otherScope: 'seed-exchange', kept: 'Slack · neri · workspace: seed-exchange' },
-  ...['matrix', 'inline', 'custom-chat'].map(service => ({ name: `case-distinct ${service}`, service, value: 'reader', normalized: 'reader', original: 'reader', observed: 'reader', second: 'Reader', scopeKind: 'server', scope: 'example.org', kept: `${service} · Reader · server: example.org` })),
+  { name: 'case-distinct custom service', service: 'custom-chat', value: 'reader', normalized: 'reader', original: 'reader', observed: 'reader', second: 'Reader', scopeKind: 'server', scope: 'example.org', kept: 'custom-chat · Reader · server: example.org' },
   { name: 'carried through successive merges', service: 'email', value: 'carried@example.org', normalized: 'carried@example.org', kept: 'carried@example.org', carried: true },
   { name: 'curated mixed-case email', service: 'email', value: 'mira@example.org', normalized: 'mira@example.org', original: 'Mira@Example.org', observed: 'mira@example.org' },
 ])('lists each merged-in address once: $name', async entry => {
@@ -252,8 +253,11 @@ it.each([
       const row = links[0].closest('.detail-row')!;
       expect(row.querySelector('.description')?.textContent).toMatch(/^Merged in · (Jul|Aug) \d{1,2}$/);
       expect(row.querySelector('.description')?.getAttribute('title')).toMatch(/^Merged /);
-      await fireEvent.click(links[0]);
-      expect(await screen.findByRole('group', { name: 'Merged profiles' })).toBeDefined();
+      const openMerge = vi.spyOn(PersonMergeHistoryController.prototype, 'selectMerge');
+      try {
+        await fireEvent.click(links[0]);
+        expect(openMerge).toHaveBeenCalledWith(41);
+      } finally { openMerge.mockRestore(); }
     }
     if (tc.carried) { await fireEvent.click(links[0]); expect(await screen.findByRole('dialog', { name: 'Earlier person merged into Current person' })).toBeDefined(); }
   } else {

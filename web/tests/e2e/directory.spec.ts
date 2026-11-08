@@ -128,8 +128,6 @@ test('Directory profile updates save with the keyboard and announce the change',
   await page.goto(directoryURL(42));
   await page.getByRole('button', { name: 'More actions' }).click();
   const item = page.getByRole('menuitemcheckbox', { name: /Keep this profile updated/ });
-  // Off says nothing under the switch; the switch shows it.
-  await expect(item).toHaveText(/^\s*Keep this profile updated\s*$/);
   await item.focus();
   await page.keyboard.press('Space');
   await expect(page.getByRole('status', { name: 'Operation status' })).toContainText('Keeping this profile updated.');

@@ -109,6 +109,7 @@ describe('PersonRecordActions', () => {
     try {
       await fireEvent.click(item);
       expect(retry).toHaveBeenCalledOnce();
+      await waitFor(() => expect(writes).toBe(2));
     } finally { retry.mockRestore(); }
   });
 

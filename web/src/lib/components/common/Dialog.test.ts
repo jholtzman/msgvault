@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { createRawSnippet, mount, unmount } from 'svelte';
 import { SelectDropdown } from '@kenn-io/kit-ui';
 import { expect, it, vi } from 'vitest';
@@ -73,4 +73,20 @@ it('shows a notice before the footer and leaves a receipt with Done alone', () =
   expect(screen.getByRole('dialog', { name: 'Split complete' })).toBeDefined();
   expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
   expect(screen.getByText('Some fields stayed with the original person.').compareDocumentPosition(done) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it('keeps focus inside the dialog when a step removes its focused control', async () => {
+  render(Dialog, {
+    title: 'History', onclose: vi.fn(),
+    children: createRawSnippet(() => ({ render: () => '<button>Open merge</button>', setup: target => {
+      const button = target as HTMLButtonElement;
+      const advance = () => button.remove();
+      button.addEventListener('click', advance);
+      return () => button.removeEventListener('click', advance);
+    } })),
+  });
+  const row = screen.getByRole('button', { name: 'Open merge' });
+  row.focus();
+  await fireEvent.click(row);
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'History' })));
 });
