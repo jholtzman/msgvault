@@ -36,6 +36,8 @@ func classifyParticipantIdentifier(
 		classification.ServiceSlug = "discord"
 	case kind == "synctech-sms" || kind == "synctech_sms" || kind == "sms":
 		classification.ServiceSlug = "sms"
+	case kind == "google_messages_web":
+		classification.ServiceSlug = "google-messages"
 	case kind == "google_voice" || kind == "google-voice":
 		classification.ServiceSlug = "google-voice"
 	case kind == "inline":

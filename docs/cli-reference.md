@@ -1,5 +1,5 @@
 ---
-last_edited: "2026-11-03"
+last_edited: "2026-11-07"
 title: CLI Reference
 description: Complete command reference for all msgvault commands.
 ---
@@ -2434,6 +2434,23 @@ msgvault import-synctech-sms <path> --owner-phone <your-number>
 | `--attachments` | `true` | Import MMS attachments |
 
 See [Text Messages](/docs/usage/text-messages/) for usage examples.
+
+---
+
+## import-google-messages-web
+
+Import a folder of conversations captured from Google Messages for web, and
+delete each capture file once its messages are stored.
+
+```bash
+msgvault import-google-messages-web <folder> --owner-phone <your-number>
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--owner-phone` | (required) | Your phone number in E.164 format |
+
+See [Text Messages](/docs/usage/text-messages/#import-google-messages-web) for the capture file format.
 
 ---
 

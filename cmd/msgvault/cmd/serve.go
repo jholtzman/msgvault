@@ -32,6 +32,7 @@ import (
 	"go.kenn.io/msgvault/internal/discord"
 	"go.kenn.io/msgvault/internal/gcal"
 	"go.kenn.io/msgvault/internal/gmail"
+	"go.kenn.io/msgvault/internal/gmessagesweb"
 	"go.kenn.io/msgvault/internal/granola"
 	imaplib "go.kenn.io/msgvault/internal/imap"
 	"go.kenn.io/msgvault/internal/jobctx"
@@ -495,6 +496,31 @@ func runServe(cmd *cobra.Command, args []string) error {
 			logger.Error("failed to schedule synctech-sms source", "source", source.Name, "error", err)
 		} else {
 			logger.Info("scheduled synctech-sms source", "source", source.Name, "schedule", source.Schedule)
+		}
+	}
+
+	for _, src := range cfg.ScheduledGoogleMessagesWebSources() {
+		source := src
+		// The job name must match the store identity (OwnerPhone) that
+		// gmessagesweb.Importer uses for GetOrCreateSource.
+		jobName, _ := api.SchedulerJobNameForSource(gmessagesweb.SourceType, source.OwnerPhone)
+		if err := sched.AddJob(scheduler.Job{
+			Name:     jobName,
+			Schedule: source.Schedule,
+			Run: invocationBoundJobRun(state, func(ctx context.Context) error {
+				return runScheduledSource(ctx, attachmentMaint, false, func(ctx context.Context) error {
+					return runScheduledGoogleMessagesWebSource(ctx, s, source)
+				})
+			}),
+		}); err != nil {
+			logger.Error("failed to schedule google-messages-web source", "source", source.Name, "error", err)
+		} else {
+			logger.Info("scheduled google-messages-web source", "source", source.Name, "schedule", source.Schedule)
+		}
+	}
+	for _, source := range cfg.GoogleMessagesWeb.Sources {
+		if source.Enabled && source.Schedule == "" {
+			logger.Warn("google-messages-web source is enabled without a schedule", "source", source.Name)
 		}
 	}
 

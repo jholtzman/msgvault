@@ -994,6 +994,67 @@ func TestSynctechSMSScheduledSources(t *testing.T) {
 	require.Truef(t, len(got) == 1 && got[0].Name == "enabled", "ScheduledSynctechSMSSources = %#v", got)
 }
 
+func TestGoogleMessagesWebSourcesConfig(t *testing.T) {
+	require := require.New(t)
+	assert := assert.New(t)
+	home, err := os.UserHomeDir()
+	require.NoError(err)
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte(`
+[[google_messages_web.sources]]
+name = "phone"
+enabled = true
+path = "~/captures/spool"
+owner_phone = "+15555550100"
+schedule = "*/30 * * * *"
+
+[[google_messages_web.sources]]
+name = "paused"
+enabled = false
+path = "~/captures/other"
+owner_phone = "+15555550100"
+schedule = "*/30 * * * *"
+`)
+	require.NoError(os.WriteFile(configPath, data, 0o600), "write config")
+	cfg, err := Load(configPath, "")
+	require.NoError(err, "Load")
+	require.NoError(cfg.DaemonConfigError())
+	got := cfg.ScheduledGoogleMessagesWebSources()
+	require.Len(got, 1, "scheduled sources")
+	assert.Equal(GoogleMessagesWebSource{
+		Name:       "phone",
+		Enabled:    true,
+		Path:       filepath.Join(home, "captures/spool"),
+		OwnerPhone: "+15555550100",
+		Schedule:   "*/30 * * * *",
+	}, got[0])
+}
+
+func TestLoadGoogleMessagesWebSourceValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		content   string
+		wantError string
+	}{
+		{name: "owner phone requires plus", content: "[[google_messages_web.sources]]\nenabled = true\npath = '/captures'\nowner_phone = '15555550100'\n", wantError: "google_messages_web.sources[0].owner_phone must start with +"},
+		{name: "path required", content: "[[google_messages_web.sources]]\nenabled = true\nowner_phone = '+15555550100'\n", wantError: "google_messages_web.sources[0].path is required"},
+		{name: "disabled without fields", content: "[[google_messages_web.sources]]\nenabled = false\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require := require.New(t)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			require.NoError(os.WriteFile(path, []byte(tc.content), 0o600))
+			cfg, err := Load(path, "")
+			if tc.wantError == "" {
+				require.NoError(err)
+				require.NoError(cfg.DaemonConfigError())
+				return
+			}
+			require.ErrorContains(err, tc.wantError)
+		})
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err, "failed to get user home dir")

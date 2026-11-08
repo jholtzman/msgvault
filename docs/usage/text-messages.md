@@ -1,5 +1,5 @@
 ---
-last_edited: "2026-11-04"
+last_edited: "2026-11-07"
 title: Text Messages
 description: Import chats and texts from common exports, and browse synchronized Teams and Discord conversations in msgvault.
 ---
@@ -22,6 +22,7 @@ open a conversation to read its messages. In the [TUI](/docs/usage/tui/), press
 | [Telegram](#import-telegram) | Telegram Desktop Machine-readable JSON export |
 | [Facebook Messenger](#import-messenger) | Download Your Information export |
 | [SMS Backup & Restore](#import-synctech-sms) | XML backup |
+| [Google Messages for web](#import-google-messages-web) | Folder of capture files |
 | [Slackdump](/docs/usage/slack/#import-a-slackdump-export) | Export directory or ZIP |
 
 ## import-whatsapp
@@ -437,6 +438,63 @@ msgvault sync-synctech-sms phone-backups
 | `--google-account` | (required) | Google account used for Drive access |
 | `--schedule` | `30 4 * * *` | Cron schedule used by `msgvault serve` |
 | `--oauth-app` | — | Named Google OAuth app to use |
+
+## import-google-messages-web
+
+Import conversations captured from Google Messages for web
+(`messages.google.com`). Google offers no export for these conversations, so a
+capture tool you run alongside the page reads each conversation as you open
+it and writes what it read to a folder. msgvault imports that folder.
+
+```bash
+msgvault import-google-messages-web <folder> --owner-phone <your-number>
+```
+
+The importer reads every `.jsonl` file directly inside the folder, oldest name
+first, and deletes each file once all of its messages are stored. Files whose
+names start with a dot are still being written and are skipped.
+
+When a file fails to import, it stays in the folder and the error names the
+file and line. The other files in the folder are still imported, and the
+failed file is tried again on the next run. A file with any invalid line
+stores none of its messages.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--owner-phone` | (required) | Your phone number in E.164 format. It must be a participant in every captured message. |
+
+### Capture file format
+
+Each line of a capture file is one message, as a JSON object with exactly
+these fields:
+
+| Field | Description |
+|---|---|
+| `message_id` | Lowercase hex SHA-256 that identifies the message. It becomes the message's source ID, so a message captured again with the same ID is not added twice. |
+| `conversation_id` | Lowercase hex SHA-256 that identifies the conversation. |
+| `participants` | Every participant's phone number in E.164 format, sorted, without repeats, including yours. Two numbers make a direct chat; more make a group. |
+| `sender` | The sender's number, one of `participants`. |
+| `sent_at` | UTC time to the minute, such as `2026-03-14T18:22:00Z`. |
+| `sent_at_precision` | Always `minute`, the precision Messages for web shows. |
+| `text` | The message text. |
+| `attachments` | Always `[]`. Images are not imported yet. |
+| `captured_at` | UTC time the capture tool read the message. |
+| `page_message_id` | The page's own ID for the message, kept with the raw record. |
+
+```json
+{"message_id":"9f2c…","conversation_id":"41ab…","participants":["+14155550100","+14155550142"],"sender":"+14155550142","sent_at":"2026-03-14T18:22:00Z","sent_at_precision":"minute","text":"Running ten minutes late","attachments":[],"captured_at":"2026-03-14T18:25:31Z","page_message_id":"101"}
+```
+
+msgvault does not compute either ID. The capture tool must derive them the
+same way every time it captures the same message, or a second capture adds
+copies. Every captured message is stored as sent; the format does not mark a
+message that failed to send.
+
+### Scheduled imports
+
+To import the folder on a schedule, add a `[[google_messages_web.sources]]`
+entry to `config.toml` and run `msgvault serve`. See
+[Google Messages for web sources](/docs/configuration/#google-messages-for-web-sources).
 
 ## Browsing Texts
 

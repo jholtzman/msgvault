@@ -13,6 +13,7 @@ import (
 	"go.kenn.io/msgvault/internal/chatwoot"
 	"go.kenn.io/msgvault/internal/circleback"
 	"go.kenn.io/msgvault/internal/gcal"
+	"go.kenn.io/msgvault/internal/gmessagesweb"
 	"go.kenn.io/msgvault/internal/granola"
 	"go.kenn.io/msgvault/internal/jobctx"
 	"go.kenn.io/msgvault/internal/matrix"
@@ -107,7 +108,7 @@ func TestSyncFailureRegisteredSourceTypes(t *testing.T) {
 	stub := newWireStub(t)
 	reporter := newReporterOrDisabled(Options{DataDir: t.TempDir(), ConfigEnabled: true}, testAPIKey, stub.server.URL, slog.Default())
 	defer func() { require.NoError(t, reporter.Close()) }()
-	for _, sourceType := range []string{"gmail", "imap", "teams", "discord", "beeper", "slack", "carddav", circleback.SourceType, gcal.SourceType, granola.SourceType, matrix.SourceType, msmail.SourceType, muesli.SourceType, notionmeetings.SourceType, omi.SourceType, plaud.SourceType, pocket.SourceType, synctechsms.SourceType, twenty.SourceType, twilio.SourceType, chatwoot.SourceType} {
+	for _, sourceType := range []string{"gmail", "imap", "teams", "discord", "beeper", "slack", "carddav", circleback.SourceType, gcal.SourceType, granola.SourceType, matrix.SourceType, msmail.SourceType, muesli.SourceType, notionmeetings.SourceType, omi.SourceType, plaud.SourceType, pocket.SourceType, synctechsms.SourceType, gmessagesweb.SourceType, twenty.SourceType, twilio.SourceType, chatwoot.SourceType} {
 		properties, _ := reporter.SanitizeProperties(EventSyncFailed, map[string]any{"sync_source": sourceType})
 		assert.Equal(t, sourceType, properties["sync_source"], sourceType)
 	}

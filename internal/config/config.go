@@ -445,6 +445,22 @@ type SynctechSMSSource struct {
 	OAuthApp           string `toml:"oauth_app"`
 }
 
+// GoogleMessagesWebConfig lists folders of Google Messages for web capture
+// files that msgvault serve imports on a schedule.
+type GoogleMessagesWebConfig struct {
+	Sources []GoogleMessagesWebSource `toml:"sources"`
+}
+
+// GoogleMessagesWebSource is one capture folder. Imported files are deleted
+// from it.
+type GoogleMessagesWebSource struct {
+	Name       string `toml:"name"`
+	Enabled    bool   `toml:"enabled"`
+	Path       string `toml:"path"`
+	OwnerPhone string `toml:"owner_phone"`
+	Schedule   string `toml:"schedule"`
+}
+
 // RemoteConfig holds configuration for a remote msgvault server.
 // Remote-capable commands use this destination unless --local is selected.
 type RemoteConfig struct {
@@ -614,6 +630,7 @@ type Config struct {
 	Accounts           []AccountSchedule               `toml:"accounts"`
 	WhatsAppApple      []WhatsAppAppleSource           `toml:"whatsapp_apple"`
 	SynctechSMS        SynctechSMSConfig               `toml:"synctech_sms"`
+	GoogleMessagesWeb  GoogleMessagesWebConfig         `toml:"google_messages_web"`
 	GCal               []GCalSource                    `toml:"gcal"`
 	Beeper             BeeperConfig                    `toml:"beeper"`
 	Chatwoot           []ChatwootSource                `toml:"chatwoot"`
@@ -980,6 +997,7 @@ func NewDefaultConfig() *Config {
 		ConversationPolicy: ConversationPolicyConfig{ActivityWindowDays: conversationpolicy.DefaultActivityWindowDays},
 		Accounts:           []AccountSchedule{},
 		SynctechSMS:        SynctechSMSConfig{Sources: []SynctechSMSSource{}},
+		GoogleMessagesWeb:  GoogleMessagesWebConfig{Sources: []GoogleMessagesWebSource{}},
 		GCal:               []GCalSource{},
 		// Group-room media is capped by default; see DefaultMediaMaxParticipants.
 		Beeper:   BeeperConfig{MediaMaxParticipants: DefaultMediaMaxParticipants},
@@ -1208,6 +1226,19 @@ func decodeConfig(cfg *Config, path string, explicit, homeOverride bool, content
 			cfg.deferDaemonError(fmt.Errorf("whatsapp_apple[%d].phone must start with +", i))
 		}
 	}
+	for i := range cfg.GoogleMessagesWeb.Sources {
+		src := &cfg.GoogleMessagesWeb.Sources[i]
+		src.Path = expandPath(src.Path)
+		if !src.Enabled {
+			continue
+		}
+		if !strings.HasPrefix(src.OwnerPhone, "+") {
+			cfg.deferDaemonError(fmt.Errorf("google_messages_web.sources[%d].owner_phone must start with +", i))
+		}
+		if src.Path == "" {
+			cfg.deferDaemonError(fmt.Errorf("google_messages_web.sources[%d].path is required", i))
+		}
+	}
 	cfg.Backup.Repo = expandPath(cfg.Backup.Repo)
 	for i := range cfg.Muesli {
 		cfg.Muesli[i].DBPath = expandPath(cfg.Muesli[i].DBPath)
@@ -1232,6 +1263,9 @@ func decodeConfig(cfg *Config, path string, explicit, homeOverride bool, content
 		cfg.IMessage.DBPath = resolveRelative(cfg.IMessage.DBPath, cfg.HomeDir)
 		for i := range cfg.WhatsAppApple {
 			cfg.WhatsAppApple[i].Path = resolveRelative(cfg.WhatsAppApple[i].Path, cfg.HomeDir)
+		}
+		for i := range cfg.GoogleMessagesWeb.Sources {
+			cfg.GoogleMessagesWeb.Sources[i].Path = resolveRelative(cfg.GoogleMessagesWeb.Sources[i].Path, cfg.HomeDir)
 		}
 		cfg.Backup.Repo = resolveRelative(cfg.Backup.Repo, cfg.HomeDir)
 		for i := range cfg.Muesli {
@@ -2680,6 +2714,18 @@ func (c *Config) GetSynctechSMSSource(name string) *SynctechSMSSource {
 func (c *Config) ScheduledSynctechSMSSources() []SynctechSMSSource {
 	var out []SynctechSMSSource
 	for _, src := range c.SynctechSMS.Sources {
+		if src.Enabled && src.Schedule != "" {
+			out = append(out, src)
+		}
+	}
+	return out
+}
+
+// ScheduledGoogleMessagesWebSources returns enabled capture folders with a
+// cron schedule.
+func (c *Config) ScheduledGoogleMessagesWebSources() []GoogleMessagesWebSource {
+	var out []GoogleMessagesWebSource
+	for _, src := range c.GoogleMessagesWeb.Sources {
 		if src.Enabled && src.Schedule != "" {
 			out = append(out, src)
 		}

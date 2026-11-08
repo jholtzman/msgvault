@@ -50,6 +50,7 @@ import (
 	"go.kenn.io/msgvault/internal/scheduler"
 	"go.kenn.io/msgvault/internal/search"
 	"go.kenn.io/msgvault/internal/store"
+	"go.kenn.io/msgvault/internal/gmessagesweb"
 	"go.kenn.io/msgvault/internal/synctechsms"
 	"go.kenn.io/msgvault/internal/testutil"
 	"go.kenn.io/msgvault/internal/testutil/dbtest"
@@ -4417,6 +4418,7 @@ func TestSchedulerJobNameForSource(t *testing.T) {
 		wantOK     bool
 	}{
 		{"synctech-sms", synctechsms.SourceType, "+15551234567", "synctech-sms:+15551234567", true},
+		{"google-messages-web", gmessagesweb.SourceType, "+15555550100", "google-messages-web:+15555550100", true},
 		{"gcal", gcal.SourceType, "alice@example.com/primary", "gcal:alice@example.com", true},
 		{"gcal no calendar id", gcal.SourceType, "alice@example.com", "", false},
 		{"granola", granola.SourceType, "acct-1", "granola:acct-1", true},

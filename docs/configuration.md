@@ -1423,6 +1423,32 @@ Scheduled SMS Backup & Restore sources are configured with `[[synctech_sms.sourc
 | `stable_after` | `10m` | How long Drive files must remain unchanged before import |
 | `oauth_app` | — | Named Google OAuth app to use |
 
+### Google Messages for web sources
+
+`msgvault serve` imports a folder of Google Messages for web capture files on
+a schedule when it has a `[[google_messages_web.sources]]` entry. Each run
+deletes the files it imports; a file that fails stays in the folder and fails
+the run, and the next run tries it again. See
+[import-google-messages-web](usage/text-messages.md#import-google-messages-web)
+for the file format.
+
+```toml
+[[google_messages_web.sources]]
+name = "phone"
+enabled = true
+path = "~/captures/google-messages"
+owner_phone = "+14155550100"
+schedule = "*/30 * * * *"
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `name` | — | Name shown in scheduler logs |
+| `enabled` | `false` | Whether `msgvault serve` schedules the source |
+| `path` | (required when enabled) | Folder of capture files. `~` expands to your home folder. |
+| `owner_phone` | (required when enabled) | Your phone number in E.164 format |
+| `schedule` | — | Cron expression used by `msgvault serve`. An enabled source without one is not scheduled. |
+
 ### Google Calendar Sources
 
 Scheduled Google Calendar sync is configured with top-level `[[gcal]]` entries. Each entry is one OAuth account; `msgvault serve` runs it on the given cron schedule (first run full-syncs and registers calendars, later runs are incremental). Authorize the account first with `msgvault add-calendar`.

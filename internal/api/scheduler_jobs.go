@@ -7,6 +7,7 @@ import (
 	"go.kenn.io/msgvault/internal/chatwoot"
 	"go.kenn.io/msgvault/internal/circleback"
 	"go.kenn.io/msgvault/internal/gcal"
+	"go.kenn.io/msgvault/internal/gmessagesweb"
 	"go.kenn.io/msgvault/internal/granola"
 	"go.kenn.io/msgvault/internal/meetingimport"
 	"go.kenn.io/msgvault/internal/muesli"
@@ -120,6 +121,10 @@ func SchedulerJobNameForSource(sourceType, identifier string) (string, bool) {
 			return "", false
 		}
 		return ChatwootJobNameForAccount(baseURL, accountID)
+	case gmessagesweb.SourceType:
+		// Store identifier == config OwnerPhone (see
+		// internal/gmessagesweb/importer.go GetOrCreateSource call).
+		return "google-messages-web:" + identifier, true
 	case synctechsms.SourceType:
 		// Store identifier == config OwnerPhone (see
 		// internal/synctechsms/importer.go GetOrCreateSource call).
