@@ -48,7 +48,6 @@ export class PersonTrackingController {
   /** The switch position a save didn't reach, while the read-back shows it didn't land. Retry saves it again. */
   failedSave = $state<boolean | null>(null);
   catalogIncludesSensitive = $state(false);
-  catalogRequestedSensitive = $state(false);
   announcement = $state<string | null>(null);
   private readonly client: APIClient;
   private disposed = false;
@@ -147,11 +146,9 @@ export class PersonTrackingController {
     if (desired === null) return { kind: 'ignored' };
     return await this.setTracked(desired);
   }
-  async retryCatalog(includeSensitive = this.catalogRequestedSensitive): Promise<void> {
-    this.catalogRequestedSensitive = includeSensitive;
-    if (this.disposed || this.catalogLoading) return;
+  async retryCatalog(includeSensitive: boolean): Promise<void> {
+    if (this.disposed) return;
     await this.loadCatalog(includeSensitive);
-    if (this.catalogRequestedSensitive !== includeSensitive) await this.retryCatalog();
   }
   destroy(): void {
     if (this.disposed) return;

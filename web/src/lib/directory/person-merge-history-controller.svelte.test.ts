@@ -104,9 +104,8 @@ describe('PersonMergeHistoryController', () => {
     expect(controller.hasNextHistoryPage).toBe(false);
   });
 
-  it('loads every named History row and its addresses in one page request and retries incomplete labels', async () => {
+  it('loads every named History row and its addresses in one page request', async () => {
     const paths: string[] = [];
-    let incomplete = true;
     const controller = new PersonMergeHistoryController(createAPIClient(async input => {
       const path = new URL(requestOf(input).url).pathname;
       paths.push(path);
@@ -114,7 +113,7 @@ describe('PersonMergeHistoryController', () => {
       return Response.json({ merges: Array.from({ length: 100 }, (_, index) => ({ ...summary(index + 1), labels: {
         profiles: [{ id: 7, display_name: 'Recorded survivor', participant_ids: [702] }, { id: 9, display_name: 'Recorded absorbed', participant_ids: [701] }],
         participants: [{ merge_id: index + 1, participant_id: 701, origin_side: 'absorbed' }],
-        members: [{ participant_id: 701, email: 'earlier@example.org' }], identifiers: [], incomplete,
+        members: [{ participant_id: 701, email: 'earlier@example.org' }], identifiers: [], incomplete: false,
       } })), limit: 100, offset: 0 });
     }), 12);
     await controller.loadHistory();
@@ -123,11 +122,6 @@ describe('PersonMergeHistoryController', () => {
     expect(controller.historyRows.get(100)?.names.get(9)).toBe('Recorded absorbed');
     expect(controller.historyRows.get(100)?.count).toBe(1);
     expect(controller.mergedInAddresses.at(-1)?.value).toBe('earlier@example.org');
-    expect(controller.historyLabelsIncomplete).toBe(true);
-    incomplete = false;
-    await controller.retryHistory();
-    expect(controller.historyLabelsIncomplete).toBe(false);
-    expect(paths).toEqual(['/api/v1/people/12/merges', '/api/v1/people/12/merges']);
     controller.destroy();
   });
 
@@ -658,7 +652,7 @@ it('uses detail labels before the list loads and keeps snapshot failure inside i
   expect(controller.labels?.addresses.get(701)?.[0].title).toBe('earlier@example.org');
   expect(controller.labels?.incomplete).toBe(false);
   await controller.revealSnapshot();
-  expect(controller.snapshotError).toBe("Couldn't load the profile at merge time.");
+  expect(controller.snapshotError).toBe('The server answered 503.');
   expect(controller.labels?.incomplete).toBe(false);
   controller.destroy();
 });

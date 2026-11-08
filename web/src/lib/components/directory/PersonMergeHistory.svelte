@@ -163,7 +163,6 @@
       <section class="merges" aria-labelledby="merges-heading">
         <h3 id="merges-heading">Merges</h3>
         {#if controller.historyError}<InlineNotice message="Couldn't load merge history." actionLabel="Retry" onaction={() => void controller.retryHistory()} details={controller.historyError} />{/if}
-        {#if controller.historyLabelsIncomplete}<InlineNotice tone="warning" message="Some merge names and addresses couldn't be loaded." actionLabel="Retry" onaction={() => void controller.retryHistory()} />{/if}
         {#if controller.historyLoading && !controller.history.length}<p role="status">Loading merges…</p>{/if}
         {#each controller.history as item (item.merge.id)}
           <DetailRow actionLabel={`Open ${mergeTitle(item.merge)} · ${formatShortDate(item.merge.created_at)}`} onclick={() => openMerge(item.merge.id)} description={mergeMeta(item)}>

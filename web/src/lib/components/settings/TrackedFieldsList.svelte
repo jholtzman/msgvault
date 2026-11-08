@@ -11,21 +11,14 @@
   let { client }: { client: APIClient } = $props();
   const controller = new PersonTrackingController(untrack(() => client));
   let labels = $state(new Map<string, string>());
-
-  let namesError = $state(false);
+  let sensitiveOpen = $state(false);
   const namesAbort = new AbortController();
-  async function loadNames(): Promise<void> {
-    namesError = false;
-    try {
-      const response = await listAttributeDefinitions({ object_type: 'person' }, { ...client, signal: namesAbort.signal });
-      if (namesAbort.signal.aborted) return;
-      if (response.data) labels = new Map((response.data.definitions ?? []).map(definition => [definition.slug, definition.label]));
-      else namesError = true;
-    } catch { if (!namesAbort.signal.aborted) namesError = true; }
-  }
   onMount(() => {
     void controller.retryCatalog(false);
-    void loadNames();
+    // Without the field names, a field reads as its slug in words.
+    void listAttributeDefinitions({ object_type: 'person' }, { ...client, signal: namesAbort.signal })
+      .then(response => { if (!namesAbort.signal.aborted && response.data) labels = new Map((response.data.definitions ?? []).map(definition => [definition.slug, definition.label])); })
+      .catch(() => undefined);
   });
   onDestroy(() => { namesAbort.abort(); controller.destroy(); });
 
@@ -41,9 +34,8 @@
   {#if controller.catalogLoading && !controller.targets.length}<p role="status">Loading fields…</p>{/if}
   <ul>{#each controller.targets.filter(target => !target.sensitive) as target (target.key)}<li>{label(target)}</li>{/each}</ul>
   {#if !controller.catalogLoading && !controller.catalogError && !controller.targets.length}<EmptyLine message="No fields yet" />{/if}
-  {#if controller.catalogError}<InlineNotice message="Couldn't load the fields kept updated." actionLabel="Retry" onaction={() => void controller.retryCatalog()} details={controller.catalogError} />{/if}
-  {#if namesError}<InlineNotice message="Couldn't load field names." actionLabel="Retry" onaction={() => void loadNames()} />{/if}
-  <Disclosure variant="plain" class="fold" title="Show sensitive fields" ontoggle={(open) => { if (open && !controller.catalogIncludesSensitive) void controller.retryCatalog(true); }}>
+  {#if controller.catalogError}<InlineNotice message="Couldn't load the fields kept updated." actionLabel="Retry" onaction={() => void controller.retryCatalog(sensitiveOpen)} details={controller.catalogError} />{/if}
+  <Disclosure variant="plain" class="fold" title="Show sensitive fields" bind:open={sensitiveOpen} ontoggle={(open) => { if (open && !controller.catalogIncludesSensitive) void controller.retryCatalog(true); }}>
     {#if controller.catalogIncludesSensitive && !sensitive.length}<EmptyLine message="No sensitive fields" />{/if}
     <ul>{#each sensitive as target (target.key)}<li>{label(target)}</li>{/each}</ul>
   </Disclosure>

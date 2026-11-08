@@ -4,13 +4,13 @@ import { createAPIClient } from '../../api/client';
 import TrackedFieldsList from './TrackedFieldsList.svelte';
 
 describe('Fields kept updated', () => {
-  it('loads readable fields once and reveals sensitive fields on demand', async () => {
+  it('loads readable fields and retries sensitive fields in their open fold', async () => {
     const queries: string[] = [];
-    let names = 0;
     const client = createAPIClient(async input => {
       const url = new URL((input as Request).url);
-      if (url.pathname.endsWith('/attribute-definitions')) return ++names === 1 ? Response.json({}, { status: 503 }) : Response.json({ definitions: [{ slug: 'favorite_plant', label: 'Preferred greenery' }, { slug: 'private_note', label: 'Private note' }] });
+      if (url.pathname.endsWith('/attribute-definitions')) return Response.json({ definitions: [{ slug: 'favorite_plant', label: 'Preferred greenery' }, { slug: 'private_note', label: 'Private note' }] });
       queries.push(url.search);
+      if (queries.length === 2) return Response.json({ message: 'Synthetic lookup unavailable' }, { status: 503 });
       return Response.json({ targets: [
         { kind: 'attribute', key: 'field:favorite_plant', slug: 'favorite_plant', description: 'A plant', sensitive: false },
         { kind: 'employment', key: 'system:employment', slug: 'employment', description: 'Current and historical employment', sensitive: false },
@@ -19,19 +19,17 @@ describe('Fields kept updated', () => {
     });
     render(TrackedFieldsList, { client });
     expect(await screen.findByRole('heading', { name: 'Fields kept updated' })).toBeDefined();
-    expect(await screen.findByText('Favorite plant')).toBeDefined();
-    expect(await screen.findByText("Couldn't load field names.")).toBeDefined();
-    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(names).toBe(2);
     expect(await screen.findByText('Preferred greenery')).toBeDefined();
     expect(screen.getByText('Work · job title, organization, and dates')).toBeDefined();
     expect(queries).toEqual(['?include_sensitive=false']);
     const disclosure = screen.getByText('Show sensitive fields');
     await fireEvent.click(disclosure);
+    await screen.findByText("Couldn't load the fields kept updated.");
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     // The fold says they're sensitive, so the rows don't.
     const sensitive = await screen.findByText('Private note');
     expect(sensitive.closest('details')?.open).toBe(true);
-    expect(queries).toEqual(['?include_sensitive=false', '?include_sensitive=true']);
+    expect(queries).toEqual(['?include_sensitive=false', '?include_sensitive=true', '?include_sensitive=true']);
     await fireEvent.click(disclosure);
     await waitFor(() => expect(sensitive.closest('details')?.open).toBe(false));
   });

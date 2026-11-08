@@ -61,10 +61,12 @@
           <DetailRow actionLabel={`Open ${committed.new_person.display_name?.trim() || 'new person'}`} onclick={() => onOpenPerson(committed.new_person.id)} description={[...(committed.new_person.display_name?.trim() ? ['New person'] : []), ...committed.new_person.participant_ids.map(participantLabel)].join(' · ') || undefined}>{committed.new_person.display_name?.trim() || 'New person'}</DetailRow>
         </div>
         {#if partial}
-          <InlineNotice tone="warning" message="Partly restored. Review both people before editing them." details={[
-            count(committed.ambiguous_rows, 'matched'), count(committed.unrestored_rows, 'restored'),
-            committed.uid_alias_disposition === 'retired_uid_alias_retargeted' ? 'Links to the merged-in profile now open the new person' : `Links to the merged-in profile still open ${remainingName}`,
-          ].filter(Boolean).join('\n')} />
+          <ul class="result-details">
+            <li>Partly restored</li>
+            {#if count(committed.ambiguous_rows, 'matched')}<li>{count(committed.ambiguous_rows, 'matched')}</li>{/if}
+            {#if count(committed.unrestored_rows, 'restored')}<li>{count(committed.unrestored_rows, 'restored')}</li>{/if}
+            <li>{committed.uid_alias_disposition === 'retired_uid_alias_retargeted' ? 'Links to the merged-in profile now open the new person' : `Links to the merged-in profile still open ${remainingName}`}</li>
+          </ul>
         {/if}
         {#if !controller.committedResult?.receiptETags.source || !controller.committedResult?.receiptETags.created}<InlineNotice tone="info" message="Profile actions will load fresh data." />{/if}
         {#if controller.reconciliationError}<InlineNotice message="Couldn't refresh the profiles." actionLabel="Retry" onaction={() => void controller.retryReconciliation()} details={controller.reconciliationError} />{/if}
@@ -109,4 +111,5 @@
   .result { gap: var(--space-pane); }
   p { margin: 0; font-size: var(--type-body-size); line-height: var(--type-body-line); }
   fieldset { display: grid; gap: var(--space-group); min-width: 0; margin: 0; padding: var(--space-box); border: var(--border-width) solid var(--border-default); border-radius: var(--radius-sm); }
+  .result-details { display: grid; margin: 0; padding-left: var(--space-pane); color: var(--text-secondary); font-size: var(--type-meta-size); line-height: var(--type-meta-line); }
 </style>

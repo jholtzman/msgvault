@@ -297,7 +297,6 @@ describe('PersonTrackingController', () => {
   });
 
   it('keeps catalog and tracking failures independent and reveals sensitive definitions only explicitly', async () => {
-    const firstCatalog = deferredResponse();
     let catalogCalls = 0;
     let trackingCalls = 0;
     const queries: string[] = [];
@@ -311,26 +310,23 @@ describe('PersonTrackingController', () => {
       }
       catalogCalls += 1;
       queries.push(url.search);
-      if (catalogCalls === 1) return firstCatalog.promise;
       if (catalogCalls === 2) return Response.json({ error: 'unavailable' }, { status: 503 });
       return Response.json(catalog(catalogCalls > 2));
     });
     const controller = new PersonTrackingController(createAPIClient(fetchFn));
     await controller.setPerson(7);
-    const initial = controller.retryCatalog(false);
-    await controller.retryCatalog(true);
-    firstCatalog.resolve(Response.json(catalog()));
-    await initial;
+    await controller.retryCatalog(false);
 
     expect(controller.tracking).toBeUndefined();
     expect(controller.trackingError).toBe("Couldn't check this profile's updates.");
     expect(controller.targets[0]?.slug).toBe('time_zone');
     await controller.retryTracking();
     expect(controller.tracking?.tracked).toBe(false);
+    await controller.retryCatalog(true);
     expect(controller.targets[0]?.slug).toBe('time_zone');
     expect(controller.catalogError).toBe('The server answered 503.');
     expect(controller.catalogIncludesSensitive).toBe(false);
-    await controller.retryCatalog();
+    await controller.retryCatalog(true);
     expect(controller.targets[0]?.slug).toBe('private_note');
     expect(controller.catalogIncludesSensitive).toBe(true);
     expect(queries).toEqual(['?include_sensitive=false', '?include_sensitive=true', '?include_sensitive=true']);

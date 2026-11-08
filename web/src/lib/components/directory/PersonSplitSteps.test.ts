@@ -130,8 +130,11 @@ describe('PersonSplitSteps', () => {
 
     expect(await screen.findByRole('button', { name: 'Open Synthetic Restored' })).toBeDefined();
     expect(document.body.textContent?.toLowerCase()).not.toContain('undo');
-    expect(screen.getByText('Partly restored. Review both people before editing them.')).toBeDefined();
-    expect(screen.getByText(/1 record couldn't be matched/)).toBeDefined();
+    // The partial-restore lines are shown under the two people, not folded away.
+    const details = screen.getAllByRole('listitem').map(item => item.textContent);
+    expect(details).toEqual(['Partly restored', "1 record couldn't be matched", 'Links to the merged-in profile still open Synthetic Source']);
+    expect(screen.getByText('Partly restored').closest('details')).toBeNull();
+    expect(screen.getByLabelText('Split result people').compareDocumentPosition(screen.getByRole('list')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText(`New person · ${label}`)).toBeDefined();
     expect(screen.getByText('Stays')).toBeDefined();
     expect(document.body.textContent).not.toMatch(/concealed-key|uid alias|restored$/i);

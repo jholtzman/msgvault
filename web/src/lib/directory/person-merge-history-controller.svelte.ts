@@ -51,7 +51,6 @@ export class PersonMergeHistoryController {
   historyOffset = $state(0);
   historyLoading = $state(false);
   historyError = $state<string | null>(null);
-  historyLabelsIncomplete = $state(false);
   pendingHistoryOffset = $state<number | null>(null);
   historyRows = $state(new Map<number, Awaited<ReturnType<typeof mergeSummaryRow>>>());
   get mergedInAddresses(): MergedInAddress[] {
@@ -86,6 +85,7 @@ export class PersonMergeHistoryController {
   private splitAbort: AbortController | undefined;
   private historyGeneration = 0;
   private detailGeneration = 0;
+  private snapshotGeneration = 0;
   private splitGeneration = 0;
   private contextGeneration = 0;
   private retryKey: string | null = null;
@@ -134,7 +134,6 @@ export class PersonMergeHistoryController {
     this.historyRows = new Map();
     this.historyOffset = 0;
     this.historyError = null;
-    this.historyLabelsIncomplete = false;
     this.historyLoading = false;
     this.pendingHistoryOffset = null;
     this.clearMergeContext();
@@ -162,10 +161,9 @@ export class PersonMergeHistoryController {
       if (!this.ownsHistory(request, generation, context)) return;
       if (response.data) {
         this.history = response.data.merges ?? [];
+        this.historyOffset = response.data.offset;
         this.pendingHistoryOffset = null;
         this.historyRows = new Map(this.history.map(item => [item.merge.id, mergeSummaryRow(item)]));
-        this.historyLabelsIncomplete = this.history.some(item => item.labels.incomplete);
-        this.historyOffset = response.data.offset;
       } else {
         this.history = retainedHistory;
         this.historyError = failureMessage(response.error, response.response.status);
@@ -194,6 +192,7 @@ export class PersonMergeHistoryController {
     this.detailAbort?.abort();
     this.snapshotAbort?.abort();
     this.splitAbort?.abort();
+    ++this.snapshotGeneration;
     ++this.splitGeneration;
     this.selectedMergeID = mergeID;
     this.detailLoading = true;
@@ -243,20 +242,30 @@ export class PersonMergeHistoryController {
   }
   async revealSnapshot(): Promise<void> {
     if (this.selectedMergeID === null || this.snapshot || this.snapshotLoading) return;
+    this.snapshotAbort?.abort();
+    const request = new AbortController();
+    this.snapshotAbort = request;
+    const generation = ++this.snapshotGeneration;
+    const context = this.contextGeneration;
     const mergeID = this.selectedMergeID;
     this.snapshotLoading = true;
     this.snapshotError = null;
-    const request = new AbortController();
-    this.snapshotAbort = request;
-    const context = this.contextGeneration;
     try {
-      const response = await generatedGetPersonMergeSnapshot({ mergeId: mergeID }, { ...this.client, signal: request.signal });
-      if (request.signal.aborted || context !== this.contextGeneration || this.selectedMergeID !== mergeID) return;
-      this.snapshot = response.data ?? null;
-      if (!this.snapshot) this.snapshotError = "Couldn't load the profile at merge time.";
-    } catch {
-      if (!request.signal.aborted && context === this.contextGeneration && this.selectedMergeID === mergeID) this.snapshotError = "Couldn't load the profile at merge time.";
-    } finally { if (!request.signal.aborted && context === this.contextGeneration) this.snapshotLoading = false; }
+      const response = await generatedGetPersonMergeSnapshot(
+        { mergeId: mergeID },
+        {
+          ...this.client,
+          signal: request.signal,
+        },
+      );
+      if (!this.ownsSnapshot(request, generation, context, mergeID)) return;
+      if (response.data) this.snapshot = response.data;
+      else this.snapshotError = failureMessage(response.error, response.response.status);
+    } catch (cause) {
+      if (this.ownsSnapshot(request, generation, context, mergeID)) this.snapshotError = failureMessage(cause, 0);
+    } finally {
+      if (generation === this.snapshotGeneration) this.snapshotLoading = false;
+    }
   }
   async openSplit(): Promise<boolean> {
     const detail = this.detail;
@@ -594,6 +603,7 @@ export class PersonMergeHistoryController {
     this.splitAbort?.abort();
     ++this.historyGeneration;
     ++this.detailGeneration;
+    ++this.snapshotGeneration;
     ++this.splitGeneration;
   }
   private ownsHistory(owner: AbortController, generation: number, context: number): boolean {
@@ -611,6 +621,16 @@ export class PersonMergeHistoryController {
       !owner.signal.aborted &&
       this.detailAbort === owner &&
       generation === this.detailGeneration &&
+      context === this.contextGeneration &&
+      this.selectedMergeID === mergeID
+    );
+  }
+  private ownsSnapshot(owner: AbortController, generation: number, context: number, mergeID: number): boolean {
+    return (
+      !this.destroyed &&
+      !owner.signal.aborted &&
+      this.snapshotAbort === owner &&
+      generation === this.snapshotGeneration &&
       context === this.contextGeneration &&
       this.selectedMergeID === mergeID
     );

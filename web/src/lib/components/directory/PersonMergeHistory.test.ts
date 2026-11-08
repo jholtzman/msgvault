@@ -299,7 +299,6 @@ describe('PersonMergeHistory', () => {
   it('keeps recorded same-name profiles when addresses are unavailable', async () => {
     renderRegressionHistory(detail(), false, true);
     const row = await screen.findByRole('button', { name: /^Open Alex Example · work merged into Alex Example · / });
-    expect(screen.getByText("Some merge names and addresses couldn't be loaded.").closest('[role]')?.getAttribute('role')).toBe('status');
     await fireEvent.click(row);
     expect(await screen.findByRole('heading', { name: 'Alex Example · work merged into Alex Example' })).toBeDefined();
     expect(await screen.findByRole('heading', { name: 'Alex Example · work' })).toBeDefined();
