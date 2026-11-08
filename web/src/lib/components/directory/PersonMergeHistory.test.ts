@@ -207,8 +207,8 @@ describe('PersonMergeHistory', () => {
   });
   it('counts only absorbed addresses and past splits in the merge row', async () => {
     renderHistory(detail(), { identifiers: addressIdentifiers() });
-    // What the merge brought in, not both sides' total of 2.
-    expect(await screen.findByText(/^(Jul|Aug) \d{1,2} · 2 addresses moved in · split back once$/)).toBeDefined();
+    // The first absorbed participant brought email and phone; the later-split participant brought another email.
+    expect(await screen.findByText(/^(Jul|Aug) \d{1,2} · 3 addresses moved in · split back once$/)).toBeDefined();
   });
 
   it('ties split addresses to a profile when its destination was deleted', async () => {
