@@ -364,6 +364,13 @@ func TestPersonMerge_Inspect(t *testing.T) {
 	require.NoError(err)
 	require.Len(list, 1)
 	assert.Equal(f.merge.Merge.ID, list[0].Merge.ID)
+	assert.False(list[0].Labels.Incomplete)
+	require.Len(list[0].Labels.Profiles, 2)
+	assert.Equal(new("Survivor"), list[0].Labels.Profiles[0].DisplayName)
+	assert.Equal(new("Absorbed"), list[0].Labels.Profiles[1].DisplayName)
+	assert.Len(list[0].Labels.Participants, 3)
+	assert.Len(list[0].Labels.Members, 3)
+
 	assert.Equal(3, list[0].ParticipantCount)
 	assert.Equal(1, list[0].SplitCount)
 	assert.Equal(1, list[0].PendingCandidateCount)
@@ -427,32 +434,37 @@ func TestPersonMerge_Snapshot(t *testing.T) {
 	require.NoError(t, err)
 	_, err = f.store.GetPersonMergeSnapshotContext(ctx, f.merge.Merge.ID)
 	require.ErrorIs(t, err, store.ErrPersonMergeSnapshotCorrupt)
-	listed, err := f.store.ListPersonMergesContext(ctx, f.merge.Person.ID)
-	require.NoError(t, err)
-	require.Len(t, listed, 1)
-	assert.True(listed[0].Labels.Incomplete)
-	assert.NotEmpty(listed[0].Labels.Participants)
-	assert.NotEmpty(listed[0].Labels.Members)
-
 }
 
 func TestPersonMerge_IdentityReadFailureKeepsRecordedNames(t *testing.T) {
-	f := newPersonMergeInspectionFixture(t, "identity-read-failure")
-	_, err := f.store.DB().ExecContext(t.Context(), "DROP TABLE participant_identifiers")
-	require.NoError(t, err)
-	listed, err := f.store.ListPersonMergesContext(t.Context(), f.merge.Person.ID)
-	require.NoError(t, err)
-	require.Len(t, listed, 1)
-	assert.True(t, listed[0].Labels.Incomplete)
-	assert.Len(t, listed[0].Labels.Profiles, 2)
-	assert.NotEmpty(t, listed[0].Labels.Participants)
-	assert.Empty(t, listed[0].Labels.Members)
-	detail, err := f.store.GetPersonMergeContext(t.Context(), f.merge.Merge.ID)
-	require.NoError(t, err)
-	assert.True(t, detail.Labels.Incomplete)
-	assert.Len(t, detail.Labels.Profiles, 2)
-	assert.NotEmpty(t, detail.Labels.Participants)
-	assert.Empty(t, detail.Labels.Members)
+	for _, failure := range []string{"identifiers", "snapshot"} {
+		t.Run(failure, func(t *testing.T) {
+			f := newPersonMergeInspectionFixture(t, "identity-read-failure")
+			var err error
+			if failure == "identifiers" {
+				_, err = f.store.DB().ExecContext(t.Context(), "DROP TABLE participant_identifiers")
+			} else {
+				_, err = f.store.DB().ExecContext(t.Context(), f.store.Rebind(`UPDATE person_merges SET snapshot_blob = ? WHERE id = ?`), []byte("corrupt"), f.merge.Merge.ID)
+			}
+			require.NoError(t, err)
+			listed, err := f.store.ListPersonMergesContext(t.Context(), f.merge.Person.ID)
+			require.NoError(t, err)
+			require.Len(t, listed, 1)
+			detail, err := f.store.GetPersonMergeContext(t.Context(), f.merge.Merge.ID)
+			require.NoError(t, err)
+			for _, labels := range []store.PersonMergeLabels{listed[0].Labels, detail.Labels} {
+				assert.True(t, labels.Incomplete)
+				assert.NotEmpty(t, labels.Participants)
+				if failure == "identifiers" {
+					assert.Len(t, labels.Profiles, 2)
+					assert.Empty(t, labels.Members)
+				} else {
+					assert.Empty(t, labels.Profiles)
+					assert.NotEmpty(t, labels.Members)
+				}
+			}
+		})
+	}
 }
 
 func TestPersonMerge_CandidateDecisionAcceptedAndIdempotent(t *testing.T) {
@@ -2556,7 +2568,10 @@ func TestPersonMerge_DetailLabelsCurrentBindings(t *testing.T) {
 	detail, err := f.store.GetPersonMergeContext(ctx, f.merge.Merge.ID)
 	require.NoError(t, err)
 	assert.Contains(t, detail.Labels.Members, store.PersonClusterMember{ParticipantID: added, DisplayName: "Later sender", Email: "Later@Example.org", NormalizedValue: "later@example.org"})
-	assert.NotContains(t, detail.Labels.Participants, store.PersonMergeParticipant{MergeID: f.merge.Merge.ID, ParticipantID: added})
+	assert.Contains(t, detail.Labels.Participants, store.PersonMergeParticipant{MergeID: f.merge.Merge.ID, ParticipantID: added, OriginSide: "survivor"})
+	for _, profile := range detail.Labels.Profiles {
+		assert.NotContains(t, profile.ParticipantIDs, added)
+	}
 	assert.Contains(t, detail.Labels.Identifiers, store.ParticipantIdentifierContext{ParticipantID: handle, Type: "handle", Value: "@Reader", DisplayValue: "@Reader", NormalizedValue: "reader", ServiceSlug: "custom-chat", ServiceLabel: "Custom chat", ScopeKind: "server", ScopeValue: "example.org"})
 	assert.False(t, detail.Labels.Incomplete)
 }

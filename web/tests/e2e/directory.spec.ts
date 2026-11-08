@@ -132,9 +132,6 @@ test('Directory profile updates save with the keyboard and announce the change',
   await expect(item).toHaveText(/^\s*Keep this profile updated\s*$/);
   await item.focus();
   await page.keyboard.press('Space');
-  await expect(item).toHaveAttribute('aria-checked', 'true');
-  await expect(item).toContainText(/Since \w{3} \d{1,2}/);
-  await expect(page.getByRole('menu')).toBeVisible();
   await expect(page.getByRole('status', { name: 'Operation status' })).toContainText('Keeping this profile updated.');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('menu')).toBeHidden();

@@ -1,16 +1,18 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createAPIClient } from '../../api/client';
 import TrackedFieldsList from './TrackedFieldsList.svelte';
 
 describe('Fields kept updated', () => {
-  it('loads readable fields and retries sensitive fields in their open fold', async () => {
+  it.each(['http', 'network'])('retries field catalog failures in place: %s', async failure => {
     const queries: string[] = [];
     const client = createAPIClient(async input => {
       const url = new URL((input as Request).url);
       if (url.pathname.endsWith('/attribute-definitions')) return Response.json({ definitions: [{ slug: 'favorite_plant', label: 'Preferred greenery' }, { slug: 'private_note', label: 'Private note' }] });
       queries.push(url.search);
-      if (queries.length === 2) return Response.json({ message: 'Synthetic lookup unavailable' }, { status: 503 });
+      if (queries.length === 1 && failure === 'network') throw new TypeError('Failed to fetch');
+      if (queries.length === 2 && failure === 'http') return Response.json({ message: 'Synthetic lookup unavailable' }, { status: 503 });
+      if (failure === 'network') return Response.json({ targets: [] });
       return Response.json({ targets: [
         { kind: 'attribute', key: 'field:favorite_plant', slug: 'favorite_plant', description: 'A plant', sensitive: false },
         { kind: 'employment', key: 'system:employment', slug: 'employment', description: 'Current and historical employment', sensitive: false },
@@ -19,12 +21,21 @@ describe('Fields kept updated', () => {
     });
     render(TrackedFieldsList, { client });
     expect(await screen.findByRole('heading', { name: 'Fields kept updated' })).toBeDefined();
+    if (failure === 'network') {
+      const error = await screen.findByText("Couldn't load the fields kept updated.");
+      expect(error.closest('details')).toBeNull();
+      await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(await screen.findByText('No fields yet')).toBeDefined();
+      expect(queries).toEqual(['?include_sensitive=false', '?include_sensitive=false']);
+      return;
+    }
     expect(await screen.findByText('Preferred greenery')).toBeDefined();
     expect(screen.getByText('Work · job title, organization, and dates')).toBeDefined();
     expect(queries).toEqual(['?include_sensitive=false']);
     const disclosure = screen.getByText('Show sensitive fields');
     await fireEvent.click(disclosure);
-    await screen.findByText("Couldn't load the fields kept updated.");
+    const error = await screen.findByText("Couldn't load sensitive fields.");
+    expect(error.closest('details')?.open).toBe(true);
     await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     // The fold says they're sensitive, so the rows don't.
     const sensitive = await screen.findByText('Private note');
@@ -67,18 +78,5 @@ describe('Fields kept updated', () => {
     if (sensitive) await fireEvent.click(screen.getByText('Show sensitive fields'));
     expect(await screen.findByText('Employment')).toBeDefined();
     expect(screen.getByText('Employment').closest('details') !== null).toBe(sensitive);
-  });
-
-  it('retries a failed lookup in place', async () => {
-    let attempts = 0;
-    const client = createAPIClient(vi.fn(async input => {
-      if ((input as Request).url.includes('attribute-definitions')) return Response.json({ definitions: [] });
-      if (++attempts === 1) throw new TypeError('Failed to fetch');
-      return Response.json({ targets: [] });
-    }));
-    render(TrackedFieldsList, { client });
-    expect(await screen.findByText("Couldn't load the fields kept updated.")).toBeDefined();
-    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText('No fields yet')).toBeDefined();
   });
 });

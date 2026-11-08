@@ -25,9 +25,19 @@ describe('provenance', () => {
     expect(provenance('user', at, `${year}-11-01T09:00:00`, { action: 'Merged' }).text).toBe('Merged by you · Nov 5');
   });
 
-  it('keeps audit details in the tooltip while the line stays short', () => {
-    const line = valueProvenance({ source: 'user', created_at: at, active_from: `${year}-11-01T09:00:00`, source_ref: 'ref-1', actor: 'user', confidence: 900 });
+  it.each([
+    {},
+    { active_until: `${year}-11-06T09:00:00` },
+    { superseded_at: `${year}-11-07T09:00:00` },
+    { active_until: `${year}-11-06T09:00:00`, superseded_at: `${year}-11-07T09:00:00` },
+  ])('keeps audit details in the tooltip while the line stays short: %j', interval => {
+    const line = valueProvenance({ source: 'user', created_at: at, active_from: `${year}-11-01T09:00:00`, source_ref: 'ref-1', actor: 'user', confidence: 900, ...interval });
     expect(line.text).toBe('You · since Nov 1');
+    expect(line.title.split('\n').map(entry => entry.startsWith('Valid') ? entry.split(' ').slice(0, 2).join(' ') : entry.split(' ')[0])).toEqual([
+      'Recorded', 'Valid from', ...('active_until' in interval ? ['Valid until'] : []), ...('superseded_at' in interval ? ['Replaced'] : []), 'Actor:', 'Reference:', 'Confidence:',
+    ]);
+    if ('active_until' in interval) expect(line.title).toMatch(/Valid until Nov 6, \d{4}/);
+    if ('superseded_at' in interval) expect(line.title).toMatch(/Replaced Nov 7, \d{4}/);
     expect(line.title).toContain('Actor: you\nReference: ref-1\nConfidence: 900');
     expect(valueProvenance({ source: 'user', created_at: `${year}-11-01T09:00:00`, updated_at: at, active_from: `${year}-11-01T09:00:00` }).title).toMatch(/^Updated Nov 5[^\n]*\nValid from Nov 1[^\n]*\nRecorded Nov 1/);
   });

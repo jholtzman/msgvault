@@ -5,7 +5,7 @@ import { mergeSummaryRow, mergeAddresses, mergeSentence } from './merge-labels';
 const detail = {
   rows: [], review_candidates: [],
   merge: { id: 41, survivor_person_id: 7 } as PersonMergeDetail['merge'],
-  participants: [701, 702, 703, 704].map(participant_id => ({ merge_id: 41, participant_id, origin_side: 'absorbed' })),
+  participants: [701, 702, 703, 704].map(participant_id => ({ merge_id: 41, participant_id, origin_side: participant_id === 704 ? 'survivor' : 'absorbed' })),
   splits: [{ new_person_id: 19 } as NonNullable<PersonMergeDetail['splits']>[number]],
 };
 
@@ -42,13 +42,14 @@ it('projects recorded names and distinguishes an empty address from a failed ide
     profiles: [{ id: 7, display_name: 'Mira Vale', participant_ids: [704] }, { id: 9, display_name: 'Neri Bloom', participant_ids: [701, 702, 703] }],
     participants: detail.participants,
     members: [{ participant_id: 701, display_name: 'Named Sender', email: 'sender@example.org', normalized_value: 'sender@example.org' }, { participant_id: 702, display_name: 'No stored address' }, { participant_id: 704, email: 'primary@example.org', normalized_value: 'primary@example.org' }],
-    identifiers: [{ participant_id: 704, type: 'email', value: 'explicit@example.org', display_value: '', normalized_value: 'explicit@example.org', service_slug: 'email', service_label: 'Email', scope_kind: '', scope_value: '' }], incomplete: true,
+    identifiers: [{ participant_id: 704, type: 'handle', value: 'neri', display_value: '', normalized_value: 'neri', service_slug: 'slack', service_label: 'Slack', scope_kind: 'workspace', scope_value: 'garden-club' }, { participant_id: 704, type: 'email', value: 'explicit@example.org', display_value: '', normalized_value: 'explicit@example.org', service_slug: 'email', service_label: 'Email', scope_kind: '', scope_value: '' }], incomplete: false,
   } });
   expect(row.names.get(9)).toBe('Neri Bloom');
   expect(row.count).toBe(3);
   expect(row.addresses.get(701)?.[0].title).toBe('sender@example.org');
+  expect(row.addresses.get(704)?.[0]).toMatchObject({ title: 'Slack', detail: 'neri · workspace: garden-club' });
   expect(row.addresses.get(702)).toEqual([]);
   expect(row.addresses.has(703)).toBe(false);
-  expect(row.addresses.get(704)?.map(address => address.title)).toEqual(['explicit@example.org']);
+  expect(row.addresses.get(704)?.map(address => address.title)).toEqual(['Slack', 'explicit@example.org']);
   expect(row.incomplete).toBe(true);
 });

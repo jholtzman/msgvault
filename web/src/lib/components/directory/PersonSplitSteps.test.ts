@@ -103,10 +103,6 @@ describe('PersonSplitSteps', () => {
     const fetchFn = vi.fn<typeof fetch>(async (input) => {
       const request = input instanceof Request ? input : new Request(input);
       const path = new URL(request.url).pathname;
-      if (path === '/api/v1/participants/701') return Response.json({ identifiers: [
-        { participant_id: 701, type: 'email', value: 'alex@example.org' },
-        { participant_id: 701, type: 'phone', value: '+12025550101' },
-      ] });
       if (path === '/api/v1/people/7') return Response.json(person(7));
       return request.method === 'GET' ? sourceResponse() : Response.json(result(false));
     });
@@ -143,67 +139,6 @@ describe('PersonSplitSteps', () => {
     expect(onOpenPerson.mock.calls).toEqual([[12], [19]]);
   });
 
-  it('keeps linked service handles and their scopes', async () => {
-    const fetchFn = vi.fn<typeof fetch>(async (input) => {
-      const request = input instanceof Request ? input : new Request(input);
-      const path = new URL(request.url).pathname;
-      if (path.startsWith('/api/v1/participants/')) {
-        const id = Number(path.split('/').at(-1));
-        return Response.json({ identifiers: [{ participant_id: id, type: 'slack', service_label: 'Slack', value: id === 701 ? 'alex' : 'alex.work', scope_kind: 'workspace', scope_value: id === 701 ? 'garden-club' : 'book-club' }] });
-      }
-      if (path === '/api/v1/people/7') return Response.json(person(7));
-      return sourceResponse();
-    });
-    const { controller } = await preparedController(fetchFn, [
-      { merge_id: 41, participant_id: 701, origin_side: 'absorbed' },
-      { merge_id: 41, participant_id: 702, origin_side: 'absorbed' },
-    ], () => ({ ...mergeDetail().labels, incomplete: false, identifiers: [
-      { participant_id: 701, type: 'slack', service_slug: 'slack', service_label: 'Slack', value: 'alex', normalized_value: 'alex', display_value: '', scope_kind: 'workspace', scope_value: 'garden-club' },
-      { participant_id: 702, type: 'slack', service_slug: 'slack', service_label: 'Slack', value: 'alex.work', normalized_value: 'alex.work', display_value: '', scope_kind: 'workspace', scope_value: 'book-club' },
-    ] }));
-    render(PersonSplitSteps, { controller, onOpenPerson: vi.fn() });
-    const boxes = within(screen.getByRole('group', { name: 'Addresses to move' })).getAllByRole('checkbox');
-    expect(boxes.map(box => box.getAttribute('aria-label') ?? box.closest('label')?.textContent?.trim())).toEqual([
-      'Slack · alex · workspace: garden-club', 'Slack · alex.work · workspace: book-club',
-    ]);
-  });
-
-  it.each([false, true])('splits selected unknown addresses when Retry recovers labels=%s', async recover => {
-    let unavailable = true;
-    const posts: unknown[] = [];
-    const participants = [701, 702].map(participant_id => ({ merge_id: 41, participant_id, origin_side: 'absorbed' }));
-    const { controller } = await preparedController(async input => {
-      const request = input as Request;
-      const path = new URL(request.url).pathname;
-      if (path.includes('/participants/')) {
-        if (unavailable) return Response.json({}, { status: 503 });
-        const id = Number(path.split('/').at(-1));
-        return Response.json({ identifiers: [{ participant_id: id, type: 'email', value: `address${id}@example.org` }] });
-      }
-      if (request.method === 'POST') {
-        posts.push(await request.json());
-        return Response.json({ ...result(true), source_person: person(12, 5, [701], 'Synthetic Source'), new_person: person(19, 1, [702], 'Synthetic Restored') });
-      }
-      return Response.json(person(12, 4, [701, 702], 'Synthetic Source'), { headers: { ETag: '"person-12-r4"' } });
-    }, participants, () => ({ ...mergeDetail(participants).labels, incomplete: unavailable, members: unavailable ? [] : [
-      { participant_id: 701, email: 'address701@example.org', normalized_value: 'address701@example.org' },
-      { participant_id: 702, email: 'address702@example.org', normalized_value: 'address702@example.org' },
-    ] }));
-    render(PersonSplitSteps, { controller, onOpenPerson: vi.fn() });
-    expect(screen.getByText("Some addresses couldn't be loaded.")).toBeDefined();
-    expect(screen.getByRole('checkbox', { name: 'Unknown address 1' })).toHaveProperty('disabled', false);
-    await fireEvent.click(screen.getByRole('checkbox', { name: 'Unknown address 2' }));
-    if (recover) {
-      unavailable = false;
-      await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-      await waitFor(() => expect(screen.getByRole('checkbox', { name: 'address702@example.org' })).toHaveProperty('checked', true));
-    }
-    await act(() => { controller.confirmSplit(); return controller.submitSplit(); });
-    expect(await screen.findByRole('button', { name: 'Open Synthetic Restored' })).toBeDefined();
-    expect(posts).toEqual([{ merge_id: 41, participant_ids: [702] }]);
-    expect(screen.getByText(recover ? 'New person · address702@example.org' : 'New person · Unknown address 2')).toBeDefined();
-  });
-
   it('distinguishes a participant with no stored address from a failed identity lookup', async () => {
     const { controller } = await preparedController(async () => sourceResponse(), undefined, () => ({ ...mergeDetail().labels, incomplete: false, members: [{ participant_id: 701, display_name: 'No stored address' }] }));
     render(PersonSplitSteps, { controller, onOpenPerson: vi.fn() });
@@ -211,12 +146,8 @@ describe('PersonSplitSteps', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 
-  it('allows an explicitly confirmed empty absorbed lineage', async () => {
-    const fetchFn = vi.fn<typeof fetch>(async (input) => {
-      const request = input instanceof Request ? input : new Request(input);
-      return request.method === 'GET' ? sourceResponse() : Response.json(result(true));
-    });
-    const { controller } = await preparedController(fetchFn, []);
+  it('explains a merge with no absorbed addresses', async () => {
+    const { controller } = await preparedController(async () => sourceResponse(), []);
     render(PersonSplitSteps, { controller, onOpenPerson: vi.fn() });
 
     expect(screen.getByText(/This merge has no addresses/)).toBeDefined();
@@ -240,14 +171,11 @@ describe('PersonSplitSteps', () => {
     const retryDetail = deferredResponse();
     let sourceReads = 0;
     let detailReads = 0;
-    let postAttempts = 0;
     const fetchFn = vi.fn<typeof fetch>(async (input) => {
       const request = input instanceof Request ? input : new Request(input);
       const path = new URL(request.url).pathname;
-      if (path.includes('/participants/')) return Response.json({ identifiers: [{ participant_id: Number(path.split('/').at(-1)), type: 'email', value: `person${path.split('/').at(-1)}@example.org` }] });
       if (path === '/api/v1/person-merges/41') {
         detailReads += 1;
-        if (detailReads === 2) return Response.json({ ...mergeDetail(), labels: { ...mergeDetail().labels, incomplete: false, members: [{ participant_id: 701, email: 'person701@example.org' }] } });
         if (detailReads === 3) return retryDetail.promise;
         return Response.json({ ...mergeDetail(), labels: { ...mergeDetail().labels, incomplete: false, members: [{ participant_id: 701, email: 'person701@example.org' }] } });
       }
@@ -270,7 +198,6 @@ describe('PersonSplitSteps', () => {
           { headers: { ETag: '"person-12-r6"' } },
         );
       }
-      postAttempts += 1;
       return Response.json({ error: 'person_merge_revision_conflict', message: 'Source changed' }, { status: 409 });
     });
     const controller = new PersonMergeHistoryController(createAPIClient(fetchFn), 7);

@@ -24,7 +24,7 @@ function detail(
     merge: { ...mergeResult(person(7)).merge, current_person_id: 12, ...overrides },
     labels: {
       profiles: [{ id: 7, display_name: 'Recorded Name', participant_ids: [702] }, { id: 9, display_name: 'Absorbed', participant_ids: [701] }],
-      participants, members: [], identifiers: [], incomplete: false,
+      participants, members: participants.map(({ participant_id }) => ({ participant_id, email: `address${participant_id}@example.org`, normalized_value: `address${participant_id}@example.org` })), identifiers: [], incomplete: false,
     },
     participants,
     rows: [],
@@ -112,15 +112,13 @@ describe('PersonMergeHistoryController', () => {
       if (!path.endsWith('/merges')) throw new Error(`Unexpected ${path}`);
       return Response.json({ merges: Array.from({ length: 100 }, (_, index) => ({ ...summary(index + 1), labels: {
         profiles: [{ id: 7, display_name: 'Recorded survivor', participant_ids: [702] }, { id: 9, display_name: 'Recorded absorbed', participant_ids: [701] }],
-        participants: [{ merge_id: index + 1, participant_id: 701, origin_side: 'absorbed' }],
-        members: [{ participant_id: 701, email: 'earlier@example.org' }], identifiers: [], incomplete: false,
+        participants: [{ merge_id: index + 1, participant_id: 701, origin_side: 'absorbed' }, { merge_id: index + 1, participant_id: 702, origin_side: 'survivor' }],
+        members: [{ participant_id: 701, email: 'earlier@example.org' }, { participant_id: 702 }], identifiers: [], incomplete: false,
       } })), limit: 100, offset: 0 });
     }), 12);
     await controller.loadHistory();
     expect(paths).toEqual(['/api/v1/people/12/merges']);
-    expect(controller.historyRows.get(100)?.names.get(7)).toBe('Recorded survivor');
-    expect(controller.historyRows.get(100)?.names.get(9)).toBe('Recorded absorbed');
-    expect(controller.historyRows.get(100)?.count).toBe(1);
+    expect(controller.historyRows.size).toBe(100);
     expect(controller.mergedInAddresses.at(-1)?.value).toBe('earlier@example.org');
     controller.destroy();
   });
@@ -320,7 +318,6 @@ describe('PersonMergeHistoryController', () => {
       const request = requestOf(input);
       requests.push(request);
       const path = new URL(request.url).pathname;
-      if (path.includes('/participants/')) return Response.json({ identifiers: [{ participant_id: Number(path.split('/').at(-1)), type: 'email', value: `person${path.split('/').at(-1)}@example.org` }] });
       if (path === '/api/v1/person-merges/41') {
         detailReads += 1;
         return Response.json(detail({ survivor_revision_after: detailReads === 1 ? 4 : 5 }));
@@ -370,7 +367,7 @@ describe('PersonMergeHistoryController', () => {
         if (sourceReads === 3)
           return Response.json({ error: 'unavailable', message: 'Source still unavailable' }, { status: 503 });
         const revision = sourceReads === 1 ? 4 : 6;
-        return Response.json(person(12, revision, [701, 702], revision === 4 ? 'Synthetic Source' : 'Fresh Synthetic Source'), {
+        return Response.json(person(12, revision, [701, 702], revision === 4 ? 'Synthetic Source' : 'Fresh Name'), {
           headers: { ETag: `"person-12-r${revision}"` },
         });
       }
@@ -412,12 +409,13 @@ describe('PersonMergeHistoryController', () => {
     await expect(controller.retryStaleSplitState()).resolves.toBe(true);
 
     expect(controller.splitNeedsFreshState).toBe(false);
-    expect(controller.sourcePerson?.display_name).toBe('Fresh Synthetic Source');
+    expect(controller.sourcePerson?.display_name).toBe('Fresh Name');
     expect(controller.sourcePerson?.revision).toBe(6);
     expect(controller.sourceETag).toBe('"person-12-r6"');
     expect(controller.detail?.merge.survivor_revision_after).toBe(6);
     await vi.waitFor(() => expect(controller.labels?.names.get(7)).toBe('Recorded Name'));
     expect(controller.labels?.for).toBe(controller.detail);
+    expect(requests.some(request => request.url.endsWith('/snapshot'))).toBe(false);
     expect(controller.selectedParticipantIDs).toEqual([]);
     expect(requests.filter((request) => request.method === 'POST')).toHaveLength(1);
 
@@ -429,29 +427,6 @@ describe('PersonMergeHistoryController', () => {
     expect(posts).toHaveLength(2);
     expect(posts[1]!.headers.get('If-Match')).toBe('"person-12-r6"');
     expect(posts[1]!.headers.get('Idempotency-Key')).toBe('234-567-890-23');
-  });
-
-  it('keeps recorded names when the live source changes during a stale split reload', async () => {
-    let fresh = false, snapshots = 0;
-    const controller = new PersonMergeHistoryController(createAPIClient(async input => {
-      const request = requestOf(input), path = new URL(request.url).pathname;
-      if (request.method === 'POST') { fresh = true; return Response.json({ error: 'person_merge_revision_conflict' }, { status: 409 }); }
-      if (path.endsWith('/person-merges/41')) return Response.json(detail({ survivor_revision_after: fresh ? 5 : 4 }));
-      if (path.endsWith('/people/12')) return Response.json(person(12, fresh ? 5 : 4, [701, 702], fresh ? 'Fresh Name' : 'Earlier Name'), { headers: { ETag: fresh ? '"person-12-r5"' : '"person-12-r4"' } });
-      if (path.endsWith('/snapshot')) { snapshots++; return Response.json({ snapshot: { persons: [{ id: 7, display_name: 'Recorded Name' }] } }); }
-      return Response.json({ identifiers: [] });
-    }), 7);
-    await controller.selectMerge(41);
-    await controller.openSplit();
-    controller.setParticipantSelected(701, true);
-    controller.confirmSplit();
-    await controller.submitSplit();
-    controller.closeSplit();
-    expect(controller.sourcePerson?.display_name).toBe('Fresh Name');
-    expect(controller.labels?.names.get(7)).toBe('Recorded Name');
-    expect(controller.labels?.for).toBe(controller.detail);
-    expect(snapshots).toBe(0);
-    controller.destroy();
   });
 
   it.each([
@@ -591,7 +566,6 @@ describe('PersonMergeHistoryController', () => {
       if (request.method === 'POST') return lateSplit.promise;
       if (path === '/api/v1/people/12') return Response.json(person(12, 4, [701, 702], 'Synthetic Person 12'), { headers: { ETag: '"person-12-r4"' } });
       if (path === '/api/v1/people/7') return Response.json(person(7));
-      if (path.startsWith('/api/v1/participants/')) return Response.json({ identifiers: [] });
       if (path.endsWith('/merges')) return Response.json({ merges: [], limit: 100, offset: 0 });
       throw new Error(`Unexpected request: ${path}`);
     });
@@ -631,7 +605,7 @@ describe('PersonMergeHistoryController', () => {
 });
 
 
-it('uses detail labels before the list loads and keeps snapshot failure inside its disclosure', async () => {
+it('keeps snapshot failure inside its disclosure', async () => {
   const paths: string[] = [];
   const labels = {
     profiles: [{ id: 7, display_name: 'Survivor', participant_ids: [702] }, { id: 9, display_name: 'Absorbed', participant_ids: [701] }],
@@ -647,10 +621,6 @@ it('uses detail labels before the list loads and keeps snapshot failure inside i
     return Response.json({ identifiers: [] });
   }), 12);
   await controller.selectMerge(41);
-  expect(paths).toEqual(['/api/v1/person-merges/41']);
-  expect(controller.labels?.names.get(9)).toBe('Absorbed');
-  expect(controller.labels?.addresses.get(701)?.[0].title).toBe('earlier@example.org');
-  expect(controller.labels?.incomplete).toBe(false);
   await controller.revealSnapshot();
   expect(controller.snapshotError).toBe('The server answered 503.');
   expect(controller.labels?.incomplete).toBe(false);

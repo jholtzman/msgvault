@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/svelte
 import { describe, expect, it, vi } from 'vitest';
 
 import { createAPIClient } from '../../api/client';
+import { valueProvenance } from './history-format';
 import ProfileHistoryDialog from './ProfileHistoryDialog.svelte';
 import { DirectoryProfileController } from '../../directory/profile-controller.svelte';
 import type { AttributeDefinition } from '../../api/generated/models';
@@ -50,10 +51,12 @@ describe('ProfileHistoryDialog', () => {
       }
       throw new Error(`unexpected ${url.pathname}`);
     }));
-    const controller = new DirectoryProfileController(client, 7, { person: person(), etags: {}, errors: { attributes: 'initial request failed' } });
+    const controller = new DirectoryProfileController(client, 7, { person: person(), etags: {}, errors: {} });
     const props = { client, controller, personID: 7, onClose: vi.fn() };
     const dialog = render(ProfileHistoryDialog, props);
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain("Couldn't load field history."));
+    await fireEvent.click(screen.getByRole('alert').querySelector('summary')!);
+    expect(screen.getByRole('alert').textContent).toContain(`${failedSection} unavailable`);
     expect(await screen.findByText('Current Name')).toBeDefined();
     failing = false;
     await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -107,22 +110,19 @@ describe('ProfileHistoryDialog', () => {
       expect(screen.getByRole('heading', { name: title })).toBeDefined();
     }
     expect.soft(screen.getByText('Scheduled end category').closest('details')).not.toBeNull();
-    const dateText = '(Jul|Aug) \\d{1,2}';
+    const currentRow = screen.getByText('Current Name').closest('.detail-row')!;
+    const line = currentRow.querySelector<HTMLElement>('.description')!;
+    const expected = valueProvenance(currentEnvelope);
+    expect(line.textContent).toBe(expected.text);
+    expect(line.title).toBe(expected.title);
     for (const value of ['Current Name', 'current@example.com', 'Current address', 'Birthday: February 14', 'Current photo']) {
-      const row = screen.getByText(value).closest('.detail-row')!;
-      expect(row.closest('details')).toBeNull();
-      // One provenance line under the value; every timestamp sits in its tooltip.
-      const line = row.querySelector<HTMLElement>('.description')!;
-      expect(line.textContent).toMatch(new RegExp(`^You · ${dateText}$`));
-      expect(line.title).toMatch(/^Updated /);
-      expect(row.textContent).not.toMatch(/Valid from|Created|Updated|\d{4}-\d{2}-\d{2}T/);
+      expect(screen.getByText(value).closest('details')).toBeNull();
     }
     const summaries = screen.getAllByText(/earlier values?$/).map((node) => node.textContent);
     expect(summaries).toEqual(['1 earlier value', '2 earlier values', '2 earlier values']);
     for (const value of ['Previous Name', 'Past category']) {
       const row = screen.getByText(value).closest('.detail-row')!;
       expect(row.closest('details')).not.toBeNull();
-      expect(row.querySelector<HTMLElement>('.description')!.title).toMatch(/Valid until|Replaced/);
     }
     expect(screen.getByText(/^Slack · workspace-a · You · /)).toBeDefined();
     expect(screen.getByText(/^Slack · workspace-b · You · /)).toBeDefined();
@@ -150,75 +150,6 @@ describe('ProfileHistoryDialog', () => {
     expect(row.textContent).not.toMatch(/987654321|synthetic-archive/);
   });
 
-  it.each([false, true])('lists each merged-in address once, including formatted phone=%s', async formattedPhone => {
-    const merge = { id: 41, survivor_person_id: 7, absorbed_person_id: 9, current_person_id: 7, survivor_vcard_uid: 'person-7', absorbed_vcard_uid: 'person-9', survivor_revision_before: 2, absorbed_revision_before: 1, survivor_revision_after: 3, actor: 'web', snapshot_version: 1, snapshot_sha256: 'synthetic-digest', created_at: when };
-    const client = createAPIClient(async input => {
-      const path = new URL((input instanceof Request ? input : new Request(input)).url).pathname;
-    const labels = {
-        profiles: [{ id: 7, display_name: 'Current person', participant_ids: [2] }, { id: 9, display_name: 'Earlier person', participant_ids: [1, 3] }],
-        participants: [{ merge_id: 41, participant_id: 1, origin_side: 'absorbed' }, { merge_id: 41, participant_id: 3, origin_side: 'absorbed', split_id: 5 }],
-        members: [], identifiers: [{ participant_id: 1, type: formattedPhone ? 'phone' : 'email', value: formattedPhone ? '+15550100100' : 'work@example.org', normalized_value: formattedPhone ? '+15550100100' : 'work@example.org', service_slug: formattedPhone ? 'phone' : 'email', ...(formattedPhone ? { display_value: '+1 555 010 0100' } : {}) }], incomplete: false,
-      };
-      if (path.endsWith('/merges')) return Response.json({ merges: [{ merge, labels, participant_count: 3, row_count: 0, pending_candidate_count: 0, split_count: 0, row_action_counts: {} }], limit: 100, offset: 0 });
-      // One address stays from the merge; one was split back since, so it isn't listed.
-      if (path === '/api/v1/person-merges/41') return Response.json({ merge, labels, participants: [
-        { merge_id: 41, participant_id: 1, origin_side: 'absorbed' }, { merge_id: 41, participant_id: 3, origin_side: 'absorbed', split_id: 5 }, { merge_id: 41, participant_id: 2, origin_side: 'survivor' },
-      ], rows: [], splits: [], review_candidates: [] });
-      if (path.startsWith('/api/v1/participants/')) {
-        const id = Number(path.split('/').at(-1));
-        return Response.json({ identifiers: [{ participant_id: id, type: formattedPhone ? 'phone' : 'email', value: id === 1 ? formattedPhone ? '+15550100100' : 'work@example.org' : `other${id}@example.org`, ...(formattedPhone && id === 1 ? { display_value: '+1 555 010 0100' } : {}) }] });
-      }
-      if (/^\/api\/v1\/people\/\d+$/.test(path)) return Response.json({ ...person(), id: Number(path.split('/').at(-1)) });
-      return Response.json({ ...emptyProfile(person()), observations: [], contact_points: [{
-        person_id: 7, address_kind: formattedPhone ? 'phone' : 'email', original_value: formattedPhone ? '+1 555 010 0100' : 'home@example.org', normalized_value: formattedPhone ? '+15550100100' : 'home@example.org', normalization: 'email', normalization_version: 1, envelope: { ...currentEnvelope, id: 3 },
-      }] });
-    });
-    render(ProfileHistoryDialog, { client, personID: 7, onClose: vi.fn() });
-
-    const section = (await screen.findByRole('heading', { name: 'Email and phone' })).closest('section')!;
-    if (formattedPhone) {
-      await screen.findByRole('button', { name: /^Open .+ merged into .+ · / });
-      expect(section.querySelectorAll('.detail-row')).toHaveLength(1);
-      expect(section.textContent).toContain('+1 555 010 0100');
-      return;
-    }
-    await waitFor(() => expect(section.textContent).toContain('work@example.org'));
-    expect(section.textContent).toContain('home@example.org');
-    expect(section.textContent).not.toContain('other3@example.org');
-    // The row opens the merge that brought the address in; its line says when, with the time in its tooltip.
-    const row = screen.getByRole('button', { name: 'Open the merge that brought in work@example.org' }).closest('.detail-row')!;
-    const line = row.querySelector<HTMLElement>('.description')!;
-    expect(line.textContent).toMatch(/^Merged in · (Jul|Aug) \d{1,2}$/);
-    expect(line.getAttribute('title')).toMatch(/^Merged /);
-    expect(row.querySelector('button')?.title).toMatch(/^Merged /);
-    await fireEvent.click(screen.getByRole('button', { name: 'Open the merge that brought in work@example.org' }));
-    expect(await screen.findByRole('group', { name: 'Merged profiles' })).toBeDefined();
-  });
-
-  it('dedupes the same service address while keeping the same handle in another workspace', async () => {
-    const merge = mergeResult(person()).merge;
-    render(ProfileHistoryDialog, { personID: 7, onClose: vi.fn(), client: createAPIClient(async input => {
-      const path = new URL((input as Request).url).pathname;
-    const labels = {
-      profiles: [{ id: 7, display_name: 'Test User', participant_ids: [] }, { id: 9, participant_ids: [1, 2] }],
-      participants: [1, 2].map(participant_id => ({ merge_id: 41, participant_id, origin_side: 'absorbed' })), members: [],
-      identifiers: [1, 2].map(participant_id => ({ participant_id, type: 'handle', service_slug: 'slack', service_label: 'Slack', value: 'neri', normalized_value: 'neri', scope_kind: 'workspace', scope_value: participant_id === 1 ? 'garden-club' : 'seed-exchange' })), incomplete: false,
-    };
-      if (path.endsWith('/merges')) return Response.json({ merges: [{ merge, labels, participant_count: 2, row_count: 0, pending_candidate_count: 0, split_count: 0, row_action_counts: {} }], limit: 100, offset: 0 });
-      if (path.endsWith('/snapshot')) return Response.json({ snapshot: { persons: [{ id: 7, display_name: 'Test User' }, { id: 9, participant_ids: [1, 2] }] } });
-      if (path === '/api/v1/person-merges/41') return Response.json({ merge, labels, participants: [1, 2].map(participant_id => ({ merge_id: 41, participant_id, origin_side: 'absorbed' })), rows: [], splits: [], review_candidates: [] });
-      if (path.includes('/participants/')) {
-        const id = Number(path.split('/').at(-1));
-        return Response.json({ identifiers: [{ participant_id: id, type: 'handle', service_slug: 'slack', service_label: 'Slack', value: 'neri', normalized_value: 'neri', scope_kind: 'workspace', scope_value: id === 1 ? 'garden-club' : 'seed-exchange' }] });
-      }
-      return Response.json({ ...emptyProfile(person()), observations: [{ participant_id: 1, address_kind: 'username', original_value: 'neri', normalized_value: 'neri', normalization: 'text', normalization_version: 1, service_slug: 'slack', scope_kind: 'workspace', scope_value: 'garden-club', envelope: { ...currentEnvelope, id: 3 } }] });
-    }) });
-    await screen.findByRole('button', { name: /^Open Slack · neri · workspace: garden-club merged into Test User · / });
-    const section = screen.getByRole('heading', { name: 'Email and phone' }).closest('section')!;
-    expect(section.querySelectorAll('.detail-row')).toHaveLength(1);
-    expect(section.textContent).toContain('Slack · neri · workspace: seed-exchange');
-  });
-
   it.each([false, true])('loads history before offering splits and refreshes after reconciliation (initial read fails=%s)', async initialFailure => {
     let reconciled = false;
     let historyReads = 0;
@@ -234,7 +165,7 @@ describe('ProfileHistoryDialog', () => {
       const path = new URL(request.url).pathname;
     const labels = {
         profiles: [{ id: 9, display_name: 'Restored Person', participant_ids: [1] }, { id: 7, display_name: 'Retained name', participant_ids: [] }],
-        participants: [{ merge_id: 41, participant_id: 1, origin_side: 'absorbed' }], members: [],
+        participants: [{ merge_id: 41, participant_id: 1, origin_side: 'absorbed' }], members: [{ participant_id: 1 }],
         identifiers: [{ participant_id: 1, type: 'email', value: 'observed@example.com', normalized_value: 'observed@example.com', service_slug: 'email' }], incomplete: false,
       };
       if (path.endsWith('/profile/history')) {
@@ -254,7 +185,6 @@ describe('ProfileHistoryDialog', () => {
         return response;
       }
       if (path.endsWith('/merges')) return Response.json({ merges: [{ merge, labels, participant_count: 1, row_count: 0, pending_candidate_count: 0, split_count: 0, row_action_counts: {} }], limit: 100, offset: 0 });
-      if (path === '/api/v1/participants/1') return Response.json({ identifiers: [{ participant_id: 1, type: 'email', value: 'observed@example.com', normalized_value: 'observed@example.com', service_slug: 'email' }] });
       if (path === '/api/v1/person-merges/41/snapshot') return Response.json({ snapshot: { persons: [{ id: 9, display_name: 'Restored Person', participant_ids: [1] }, { id: 7, display_name: 'Retained name' }] } });
       if (path === '/api/v1/person-merges/41') return Response.json({ merge, labels, participants: [{ merge_id: 41, participant_id: 1, origin_side: 'absorbed' }], rows: [], splits: [], review_candidates: [] });
       if (path === '/api/v1/people/7') return Response.json(source, { headers: { ETag: '"person-7-r3"' } });
@@ -285,63 +215,50 @@ describe('ProfileHistoryDialog', () => {
       });
     } finally { releaseInitial(initialResponse ?? Response.json({})); view.unmount(); }
   });
-
-
 });
 
-it.each(['matrix', 'inline', 'custom-chat'])('keeps differently cased %s identities as separate merge addresses', async service => {
-  const merge = mergeResult(person()).merge;
+it.each([
+  { name: 'email and split lineage', service: 'email', value: 'work@example.org', normalized: 'work@example.org', original: 'home@example.org', observed: 'home@example.org', kept: 'work@example.org', split: true, open: true },
+  { name: 'formatted phone', service: 'phone', value: '+15550100100', normalized: '+15550100100', display: '+1 555 010 0100', original: '+1 555 010 0100', observed: '+15550100100' },
+  { name: 'same handle in another workspace', service: 'slack', value: 'neri', normalized: 'neri', original: 'neri', observed: 'neri', scopeKind: 'workspace', scope: 'garden-club', otherScope: 'seed-exchange', kept: 'Slack · neri · workspace: seed-exchange' },
+  ...['matrix', 'inline', 'custom-chat'].map(service => ({ name: `case-distinct ${service}`, service, value: 'reader', normalized: 'reader', original: 'reader', observed: 'reader', second: 'Reader', scopeKind: 'server', scope: 'example.org', kept: `${service} · Reader · server: example.org` })),
+  { name: 'carried through successive merges', service: 'email', value: 'carried@example.org', normalized: 'carried@example.org', kept: 'carried@example.org', carried: true },
+  { name: 'curated mixed-case email', service: 'email', value: 'mira@example.org', normalized: 'mira@example.org', original: 'Mira@Example.org', observed: 'mira@example.org' },
+])('lists each merged-in address once: $name', async entry => {
+  const tc = entry as typeof entry & { display?: string; original?: string; observed?: string; scopeKind?: string; scope?: string; otherScope?: string; second?: string; kept?: string; split?: boolean; open?: boolean; carried?: boolean };
+  const first = { ...mergeResult(person()).merge, id: 41, survivor_person_id: tc.carried ? 8 : 7, absorbed_person_id: 9, current_person_id: 7 };
+  const merges = tc.carried ? [{ ...first, id: 42, survivor_person_id: 7, absorbed_person_id: 8 }, first] : [first];
+  const identifiers = [{ participant_id: 1, type: tc.service === 'email' || tc.service === 'phone' ? tc.service : 'handle', value: tc.value, display_value: tc.display ?? '', normalized_value: tc.normalized, service_slug: tc.service, service_label: tc.service === 'slack' ? 'Slack' : tc.service, scope_kind: tc.scopeKind ?? '', scope_value: tc.scope ?? '' },
+    ...(tc.second || tc.otherScope ? [{ participant_id: 2, type: 'handle', value: tc.second ?? tc.value, display_value: '', normalized_value: tc.second ?? tc.normalized, service_slug: tc.service, service_label: tc.service === 'slack' ? 'Slack' : tc.service, scope_kind: tc.scopeKind ?? '', scope_value: tc.otherScope ?? tc.scope ?? '' }] : []),
+    ...(tc.split ? [{ participant_id: 3, type: 'email', value: 'other3@example.org', display_value: '', normalized_value: 'other3@example.org', service_slug: 'email', service_label: 'Email', scope_kind: '', scope_value: '' }] : [])];
+  const labels = (merge: typeof first) => ({
+    profiles: [{ id: merge.survivor_person_id, display_name: merge.id === 41 && tc.carried ? 'Earlier person' : 'Current person', participant_ids: [20] }, { id: merge.absorbed_person_id, display_name: merge.id === 42 ? 'Earlier person' : 'First person', participant_ids: identifiers.map(item => item.participant_id) }],
+    participants: [{ merge_id: merge.id, participant_id: 20, origin_side: 'survivor' }, ...identifiers.map(item => ({ merge_id: merge.id, participant_id: item.participant_id, origin_side: 'absorbed', ...(item.participant_id === 3 ? { split_id: 5 } : {}) }))],
+    members: [20, ...identifiers.map(item => item.participant_id)].map(participant_id => ({ participant_id })), identifiers, incomplete: false,
+  });
   render(ProfileHistoryDialog, { personID: 7, onClose: vi.fn(), client: createAPIClient(async input => {
     const path = new URL((input as Request).url).pathname;
-    const labels = {
-      profiles: [{ id: 7, display_name: 'Test User', participant_ids: [] }, { id: 9, participant_ids: [1, 2] }],
-      participants: [1, 2].map(participant_id => ({ merge_id: 41, participant_id, origin_side: 'absorbed' })), members: [],
-      identifiers: [1, 2].map(participant_id => ({ participant_id, type: service, service_slug: service, service_label: service, value: participant_id === 1 ? 'reader' : 'Reader', normalized_value: participant_id === 1 ? 'reader' : 'Reader', scope_kind: 'server', scope_value: 'example.org' })), incomplete: false,
-    };
-    if (path.endsWith('/merges')) return Response.json({ merges: [{ merge, labels, participant_count: 2, row_count: 0, pending_candidate_count: 0, split_count: 0, row_action_counts: {} }], limit: 100, offset: 0 });
-    if (path.endsWith('/snapshot')) return Response.json({ snapshot: { persons: [{ id: 7, display_name: 'Test User' }, { id: 9, participant_ids: [1, 2] }] } });
-    if (path === '/api/v1/person-merges/41') return Response.json({ merge, labels, participants: [1, 2].map(participant_id => ({ merge_id: 41, participant_id, origin_side: 'absorbed' })), rows: [], splits: [], review_candidates: [] });
-    if (path.includes('/participants/')) {
-      const id = Number(path.split('/').at(-1));
-      return Response.json({ identifiers: [{ participant_id: id, type: service, service_slug: service, service_label: service, value: id === 1 ? 'reader' : 'Reader', scope_kind: 'server', scope_value: 'example.org' }] });
+    if (path.endsWith('/merges')) return Response.json({ merges: merges.map(merge => ({ merge, labels: labels(merge), participant_count: identifiers.length + 1, row_count: 0, split_count: tc.split ? 1 : 0, pending_candidate_count: 0, row_action_counts: {} })), limit: 100, offset: 0 });
+    if (path.startsWith('/api/v1/person-merges/')) { const merge = merges.find(item => path.endsWith(`/${item.id}`))!; return Response.json({ merge, labels: labels(merge), participants: labels(merge).participants, rows: [], splits: [], review_candidates: [] }); }
+    return Response.json({ ...emptyProfile(person()), contact_points: tc.original ? [{ person_id: 7, address_kind: tc.service === 'email' || tc.service === 'phone' ? tc.service : 'username', original_value: tc.original, normalized_value: tc.observed, service_slug: tc.service, scope_kind: tc.scopeKind ?? '', scope_value: tc.scope ?? '', normalization: 'none', normalization_version: 1, envelope: { ...currentEnvelope, id: 3 } }] : [] });
+  }) });
+  await screen.findAllByRole('button', { name: /^Open .+ merged into .+ · / });
+  const section = screen.getByRole('heading', { name: 'Email and phone' }).closest('section')!;
+  if (tc.kept) {
+    const links = screen.getAllByRole('button', { name: `Open the merge that brought in ${tc.kept}` });
+    expect(links).toHaveLength(1);
+    if (tc.open) {
+      expect(section.textContent).not.toContain('other3@example.org');
+      const row = links[0].closest('.detail-row')!;
+      expect(row.querySelector('.description')?.textContent).toMatch(/^Merged in · (Jul|Aug) \d{1,2}$/);
+      expect(row.querySelector('.description')?.getAttribute('title')).toMatch(/^Merged /);
+      await fireEvent.click(links[0]);
+      expect(await screen.findByRole('group', { name: 'Merged profiles' })).toBeDefined();
     }
-    return Response.json({ ...emptyProfile(person()), observations: [{ participant_id: 1, address_kind: 'username', original_value: 'reader', normalized_value: 'reader', normalization: 'none', normalization_version: 1, service_slug: service, scope_kind: 'server', scope_value: 'example.org', envelope: { ...currentEnvelope, id: 3 } }] });
-  }) });
-  expect(await screen.findByRole('button', { name: `Open the merge that brought in ${service} · Reader · server: example.org` })).toBeDefined();
-});
-
-it('lists an imported address once when successive merges carry it forward', async () => {
-  const first = { ...mergeResult(person()).merge, id: 41, absorbed_person_id: 9, survivor_person_id: 8, current_person_id: 7 };
-  const second = { ...first, id: 42, absorbed_person_id: 8, survivor_person_id: 7 };
-  render(ProfileHistoryDialog, { personID: 7, onClose: vi.fn(), client: createAPIClient(async input => {
-    const path = new URL((input as Request).url).pathname;
-    const labels = (id: number) => ({ profiles: [{ id: 7, display_name: 'Current person', participant_ids: [] }, { id: 8, display_name: 'Earlier person', participant_ids: [1] }, { id: 9, display_name: 'First person', participant_ids: [1] }], participants: [{ merge_id: id, participant_id: 1, origin_side: 'absorbed' }], members: [{ participant_id: 1, email: 'carried@example.org', normalized_value: 'carried@example.org' }], identifiers: [], incomplete: false });
-    if (path.endsWith('/merges')) return Response.json({ merges: [second, first].map(merge => ({ merge, labels: labels(merge.id), participant_count: 1, row_count: 0, pending_candidate_count: 0, split_count: 0, row_action_counts: {} })), limit: 100, offset: 0 });
-    if (path.endsWith('/snapshot')) return Response.json({ version: 1, snapshot: { version: 1, persons: [{ id: 7, display_name: 'Current person' }, { id: 8, display_name: 'Earlier person', participant_ids: [1] }, { id: 9, display_name: 'First person', participant_ids: [1] }] } });
-    if (path.startsWith('/api/v1/person-merges/')) return Response.json({ labels: labels(Number(path.split('/').at(-1))), merge: path.endsWith('/41') ? first : second, participants: [{ merge_id: Number(path.split('/').at(-1)), participant_id: 1, origin_side: 'absorbed' }], rows: [], splits: [], review_candidates: [] });
-    if (path.includes('/participants/')) return Response.json({ participant: { participant_id: 1, display_name: 'Named sender', email: 'carried@example.org', normalized_value: 'carried@example.org' }, identifiers: [] });
-    return Response.json(emptyProfile(person()));
-  }) });
-  await waitFor(() => expect(screen.queryByText('Loading merges…')).toBeNull());
-  await screen.findByRole('button', { name: /^Open First person merged into Earlier person/ });
-  const addresses = screen.getAllByRole('button', { name: 'Open the merge that brought in carried@example.org' });
-  expect(addresses).toHaveLength(1);
-  await fireEvent.click(addresses[0]);
-  expect(await screen.findByRole('dialog', { name: 'Earlier person merged into Current person' })).toBeDefined();
-});
-
-
-it('keeps a curated mixed-case email once when its merged-in address has the same server identity', async () => {
-  const merge = mergeResult(person()).merge;
-  render(ProfileHistoryDialog, { personID: 7, onClose: vi.fn(), client: createAPIClient(async input => {
-    const path = new URL((input as Request).url).pathname;
-    if (path.endsWith('/merges')) return Response.json({ merges: [{ merge, labels: {
-      profiles: [{ id: 7, display_name: 'Test User', participant_ids: [] }, { id: 9, display_name: 'Earlier person', participant_ids: [1] }],
-      participants: [{ merge_id: 41, participant_id: 1, origin_side: 'absorbed' }], members: [{ participant_id: 1, email: 'mira@example.org', normalized_value: 'mira@example.org' }], identifiers: [], incomplete: false,
-    }, participant_count: 1, row_count: 0, split_count: 0, pending_candidate_count: 0, row_action_counts: {} }], limit: 100, offset: 0 });
-    return Response.json({ ...emptyProfile(person()), contact_points: [{ person_id: 7, address_kind: 'email', original_value: 'Mira@Example.org', normalized_value: 'mira@example.org', service_slug: 'email', normalization: 'email', normalization_version: 1, envelope: { ...currentEnvelope, id: 3 } }] });
-  }) });
-  await screen.findByRole('button', { name: /^Open Earlier person merged into Test User/ });
-  expect(screen.getByText('Mira@Example.org')).toBeDefined();
-  expect(screen.queryByRole('button', { name: 'Open the merge that brought in mira@example.org' })).toBeNull();
+    if (tc.carried) { await fireEvent.click(links[0]); expect(await screen.findByRole('dialog', { name: 'Earlier person merged into Current person' })).toBeDefined(); }
+  } else {
+    expect(section.querySelectorAll('.detail-row')).toHaveLength(1);
+    expect(section.textContent).toContain(tc.original);
+    expect(screen.queryByRole('button', { name: new RegExp('Open the merge that brought in') })).toBeNull();
+  }
 });

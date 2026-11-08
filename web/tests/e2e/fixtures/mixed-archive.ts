@@ -1253,7 +1253,7 @@ function reviewMergeSummary(splitCompleted = false): PersonMergeSummary {
     labels: {
       profiles: [{ id: 7, display_name: 'Synthetic One', participant_ids: [701, 702] }, { id: 9, display_name: 'Synthetic Two', participant_ids: [901] }],
       participants: [{ merge_id: 41, participant_id: 901, origin_side: 'absorbed', ...(splitCompleted ? { split_id: 55 } : {}) }, { merge_id: 41, participant_id: 701, origin_side: 'survivor' }, { merge_id: 41, participant_id: 702, origin_side: 'survivor' }],
-      members: [], incomplete: false,
+      members: [701, 702, 901].map(participant_id => ({ participant_id })), incomplete: false,
       identifiers: [701, 702, 901].map(participant_id => ({ participant_id, type: 'email', value: `person${participant_id}@example.org`, normalized_value: `person${participant_id}@example.org`, display_value: '', service_slug: 'email', service_label: 'Email', scope_kind: '', scope_value: '' })),
     },
     participant_count: 3,

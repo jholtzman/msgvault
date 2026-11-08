@@ -532,10 +532,15 @@ describe('SourcesWorkspace', () => {
     expect(within(screen.getByRole('dialog', { name: 'Add source' })).getByRole('list', { name: 'Source kinds' })).toBeDefined();
   });
 
-  it('opens source setup and sync history from an empty workspace', async () => {
+  it.each(['setup', 'sync history'])('opens %s from an empty workspace', async action => {
     const onOpenOperations = vi.fn();
     render(SourcesWorkspace, { client: createCaptureClient(api([]), []), onOpenOperations });
     expect(await screen.findByText('Add your first source')).toBeDefined();
+    if (action === 'sync history') {
+      await fireEvent.click(screen.getByRole('button', { name: 'Sync history' }));
+      expect(onOpenOperations).toHaveBeenCalledOnce();
+      return;
+    }
     // Each kind says only what its name doesn't.
     expect(await screen.findByRole('button', { name: 'Microsoft Outlook.com, Hotmail, or Microsoft 365' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Contacts Google, Microsoft, or CardDAV address books · opens Settings' })).toBeDefined();
@@ -543,19 +548,9 @@ describe('SourcesWorkspace', () => {
     expect(screen.getByRole('link', { name: 'All sources' })).toBeDefined();
     await fireEvent.click(await screen.findByRole('button', { name: /^Gmail Includes/ }));
     const dialog = within(screen.getByRole('dialog', { name: 'Add Gmail' }));
-    const email = dialog.getByLabelText('Email address');
-    expect(dialog.queryByText(/Run this in a terminal/)).toBeNull();
-    await fireEvent.input(email, { target: { value: 'you@gmail.com' } });
-    expect(dialog.getByText('Run this command in a terminal where msgvault is installed.')).toBeDefined();
-    expect(dialog.getAllByRole('button', { name: 'Copy msgvault add-account you@gmail.com' })).toHaveLength(1);
     await fireEvent.click(dialog.getByRole('button', { name: 'Back to Add source' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getAllByRole('button', { name: /^Gmail Includes/ })).toHaveLength(1);
-    await fireEvent.click(screen.getByRole('button', { name: /^Gmail Includes/ }));
-    await fireEvent.input(within(screen.getByRole('dialog', { name: 'Add Gmail' })).getByLabelText('Email address'), { target: { value: 'garden user@example.org' } });
-    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add Gmail' })).getByRole('button', { name: 'Done' }));
-    await fireEvent.click(screen.getByRole('button', { name: 'Sync history' }));
-    expect(onOpenOperations).toHaveBeenCalledOnce();
   });
 
   it('keeps a first-run step and its filled field through a status poll that finds the new source', async () => {

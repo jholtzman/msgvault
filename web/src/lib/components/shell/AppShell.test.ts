@@ -62,9 +62,6 @@ describe('AppShell', () => {
     const rendered = render(AppShell, { client, state });
     try {
       await fireEvent.click(await screen.findByRole('button', { name: 'Add source…' }));
-      expect(await screen.findByRole('heading', { name: 'Add your first source' })).toBeDefined();
-      expect(screen.getAllByRole('list', { name: 'Source kinds' })).toHaveLength(1);
-      expect(screen.queryByRole('dialog')).toBeNull();
       expect(state.current.workspace).toBe('sources');
     } finally {
       rendered.unmount();

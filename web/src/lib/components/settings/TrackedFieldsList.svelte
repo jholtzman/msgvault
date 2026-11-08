@@ -36,9 +36,10 @@
   {#if controller.catalogLoading && !controller.targets.length}<p role="status">Loading fields…</p>{/if}
   <ul>{#each controller.targets.filter(target => !target.sensitive) as target (target.key)}<li>{label(target)}</li>{/each}</ul>
   {#if !controller.catalogLoading && !controller.catalogError && !controller.targets.length}<EmptyLine message="No fields yet" />{/if}
-  {#if controller.catalogError}<InlineNotice message="Couldn't load the fields kept updated." actionLabel="Retry" onaction={() => void controller.retryCatalog(sensitiveOpen)} details={controller.catalogError} />{/if}
+  {#if controller.catalogError && !sensitiveOpen}<InlineNotice message="Couldn't load the fields kept updated." actionLabel="Retry" onaction={() => void controller.retryCatalog(sensitiveOpen)} details={controller.catalogError} />{/if}
   {#if namesError}<InlineNotice message="Couldn't load the field names." actionLabel="Retry" onaction={loadNames} details={namesError} />{/if}
   <Disclosure variant="plain" class="fold" title="Show sensitive fields" bind:open={sensitiveOpen} ontoggle={(open) => { if (open && !controller.catalogIncludesSensitive) void controller.retryCatalog(true); }}>
+    {#if controller.catalogError && sensitiveOpen}<InlineNotice message="Couldn't load sensitive fields." actionLabel="Retry" onaction={() => void controller.retryCatalog(true)} details={controller.catalogError} />{/if}
     {#if controller.catalogIncludesSensitive && !sensitive.length}<EmptyLine message="No sensitive fields" />{/if}
     <ul>{#each sensitive as target (target.key)}<li>{label(target)}</li>{/each}</ul>
   </Disclosure>

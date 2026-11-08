@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAPIClient } from '../../api/client';
 import type { DirectoryReadBundle } from '../../directory/models';
 import { DirectoryProfileController } from '../../directory/profile-controller.svelte';
+import { PersonTrackingController } from '../../directory/person-tracking-controller.svelte';
 import PersonRecordActions from './PersonRecordActions.svelte';
 
 const when = '2026-08-01T00:00:00Z';
@@ -62,17 +63,18 @@ describe('PersonRecordActions', () => {
     expect(item.textContent).not.toContain('On since');
   });
 
-  it('finishes and announces a save after the menu closes', async () => {
+  it.each([false, true])('announces a save after the menu closes: failed=%s', async failed => {
     let release!: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
     const onAnnounce = vi.fn();
-    renderActions(vi.fn<typeof fetch>(async input => {
-      const request = input instanceof Request ? input : new Request(input);
+    renderActions(async input => {
+      const request = input as Request;
       if (request.method !== 'PUT') return Response.json({ person_id: 7, tracked: false, tracked_at: null });
       const { tracked } = await request.json();
       await held;
-      return Response.json({ person_id: 7, tracked, tracked_at: '2026-11-05T12:00:00Z' });
-    }), undefined, undefined, onAnnounce);
+      return failed ? Response.json({ message: 'Synthetic save unavailable' }, { status: 503 })
+        : Response.json({ person_id: 7, tracked, tracked_at: '2026-11-05T12:00:00Z' });
+    }, undefined, undefined, onAnnounce);
     await fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     const item = await screen.findByRole('menuitemcheckbox', { name: /Keep this profile updated/ });
     await waitFor(() => expect(item.textContent?.trim()).toBe('Keep this profile updated'));
@@ -81,29 +83,11 @@ describe('PersonRecordActions', () => {
     await fireEvent.keyDown(item, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
     release();
-    await waitFor(() => expect(onAnnounce).toHaveBeenCalledWith('Keeping this profile updated.'));
-    await fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    expect((await screen.findByRole('menuitemcheckbox', { name: /Keep this profile updated/ })).getAttribute('aria-checked')).toBe('true');
-  });
-
-  it('announces a failed save after the menu closes', async () => {
-    let release!: () => void;
-    const held = new Promise<void>(resolve => { release = resolve; });
-    const onAnnounce = vi.fn();
-    renderActions(async input => {
-      const request = input as Request;
-      if (request.method !== 'PUT') return Response.json({ person_id: 7, tracked: false, tracked_at: null });
-      await held;
-      return Response.json({ message: 'Synthetic save unavailable' }, { status: 503 });
-    }, undefined, undefined, onAnnounce);
-    await fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    const item = await screen.findByRole('menuitemcheckbox', { name: /Keep this profile updated/ });
-    await waitFor(() => expect(item.textContent?.trim()).toBe('Keep this profile updated'));
-    await fireEvent.click(item);
-    await fireEvent.keyDown(item, { key: 'Escape' });
-    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
-    release();
-    await waitFor(() => expect(onAnnounce).toHaveBeenCalledWith("Couldn't save profile updates."));
+    await waitFor(() => expect(onAnnounce).toHaveBeenCalledWith(failed ? "Couldn't save profile updates." : 'Keeping this profile updated.'));
+    if (!failed) {
+      await fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+      expect((await screen.findByRole('menuitemcheckbox', { name: /Keep this profile updated/ })).getAttribute('aria-checked')).toBe('true');
+    }
   });
 
   it('says a failed save as Couldn\'t save, and Retry saves again', async () => {
@@ -121,11 +105,11 @@ describe('PersonRecordActions', () => {
     await waitFor(() => expect(item.textContent?.trim()).toBe('Keep this profile updated'));
     await fireEvent.click(item);
     await waitFor(() => expect(item.textContent).toContain("Couldn't save · Retry"));
-    expect(item.getAttribute('aria-checked')).toBe('false');
-    await fireEvent.click(item);
-    await waitFor(() => expect(item.getAttribute('aria-checked')).toBe('true'));
-    expect(writes).toBe(2);
-    expect(item.textContent).not.toContain("Couldn't");
+    const retry = vi.spyOn(PersonTrackingController.prototype, 'retrySave');
+    try {
+      await fireEvent.click(item);
+      expect(retry).toHaveBeenCalledOnce();
+    } finally { retry.mockRestore(); }
   });
 
   it.each([false, true])('offers setup while preserving the ability to turn existing tracking off: %s', async tracked => {

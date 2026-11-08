@@ -2351,33 +2351,26 @@ func TestStoreAPIAdapterRunCLIRepairMessagePropagatesCancellation(t *testing.T) 
 }
 
 func TestStoreAPIAdapterAppendsServerOwnedGrantDecision(t *testing.T) {
-	adapter := &storeAPIAdapter{}
-	req := api.CLIRunRequest{
-		Args:         []string{"add-account", "user@example.com", "--readonly"},
-		GrantDecided: true,
+	for _, tc := range []struct {
+		name       string
+		args, want []string
+	}{
+		{"flags", []string{"add-account", "user@example.com", "--readonly"}, []string{"add-account", "user@example.com", "--readonly", "--grant-decided=true"}},
+		{"positional boundary", []string{"add-account", "--", "-sender@example.org"}, []string{"add-account", "--grant-decided=true", "--", "-sender@example.org"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := &storeAPIAdapter{}
+			req := api.CLIRunRequest{Args: append([]string(nil), tc.args...), GrantDecided: true}
+			var gotArgs []string
+			err := adapter.runCLICommandWithRunner(t.Context(), req, nil, func(_ context.Context, args []string, _ map[string]string, _ string, _ func(string, string) error) error {
+				gotArgs = args
+				return nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, gotArgs)
+			assert.Equal(t, tc.args, req.Args, "server injection must not mutate caller-owned args")
+		})
 	}
-	var gotArgs []string
-
-	err := adapter.runCLICommandWithRunner(
-		t.Context(), req, nil,
-		func(
-			_ context.Context,
-			args []string,
-			_ map[string]string,
-			_ string,
-			_ func(string, string) error,
-		) error {
-			gotArgs = args
-			return nil
-		},
-	)
-
-	require.NoError(t, err)
-	assert.Equal(t, []string{
-		"add-account", "user@example.com", "--readonly", "--grant-decided=true",
-	}, gotArgs)
-	assert.Equal(t, []string{"add-account", "user@example.com", "--readonly"}, req.Args,
-		"server injection must not mutate caller-owned args")
 }
 
 func TestStoreAPIAdapterInterceptsExplicitRepackInDaemonParent(t *testing.T) {
