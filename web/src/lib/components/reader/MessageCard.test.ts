@@ -79,6 +79,103 @@ describe('MessageCard', () => {
     expect(screen.getByText('RE2.wav (not downloaded)')).toBeTruthy();
   });
 
+  describe('inline images', () => {
+    function pngBytes(width = 640, height = 480): ArrayBuffer {
+      const u32 = (value: number): number[] => [
+        (value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff
+      ];
+      const chunk = (type: string, data: number[]): number[] => [
+        ...u32(data.length), ...new TextEncoder().encode(type), ...data, 0, 0, 0, 0
+      ];
+      return new Uint8Array([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        ...chunk('IHDR', [...u32(width), ...u32(height), 8, 2, 0, 0, 0]),
+        ...chunk('IEND', [])
+      ]).buffer as ArrayBuffer;
+    }
+
+    const photo = { id: 5, stored: true, filename: 'image-1.png', mimeType: 'image/png', sizeBytes: 64 };
+
+    // The card also asks for recordings and tasks; only file content matters here.
+    function routed(file: () => Response): ReturnType<typeof vi.fn<typeof fetch>> {
+      return vi.fn<typeof fetch>(async (input) => {
+        const path = new URL((input as Request).url).pathname;
+        return path.startsWith('/api/v1/files/') ? file() : new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+      });
+    }
+
+    function fileRequests(fetchFn: ReturnType<typeof vi.fn<typeof fetch>>): string[] {
+      return fetchFn.mock.calls
+        .map((call) => new URL((call[0] as Request).url).pathname)
+        .filter((path) => path.startsWith('/api/v1/files/'));
+    }
+
+    function stubObjectURLs(): ReturnType<typeof vi.fn> {
+      const revoke = vi.fn();
+      Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:inline-photo') });
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revoke });
+      return revoke;
+    }
+
+    it('shows a chat message image in place, still linked for download', async () => {
+      const revoke = stubObjectURLs();
+      const fetchFn = routed(() => new Response(pngBytes(), { headers: { 'Content-Type': 'image/png' } }));
+      const view = render(MessageCard, {
+        message: detail({ messageType: 'google_messages_web', attachments: [photo] }),
+        expanded: true,
+        client: createAPIClient(fetchFn)
+      });
+
+      const image = await screen.findByRole('img', { name: 'image-1.png' });
+      expect(image.getAttribute('src')).toBe('blob:inline-photo');
+      expect(image.closest('a')?.getAttribute('href')).toBe('/api/v1/files/5/content');
+      expect(fileRequests(fetchFn)).toEqual(['/api/v1/files/5/content']);
+
+      view.unmount();
+      expect(revoke).toHaveBeenCalledWith('blob:inline-photo');
+    });
+
+    it('keeps the download link when the bytes do not match the declared type', async () => {
+      stubObjectURLs();
+      const fetchFn = routed(() => new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/png' } }));
+      render(MessageCard, {
+        message: detail({ messageType: 'google_voice_text', attachments: [photo] }),
+        expanded: true,
+        client: createAPIClient(fetchFn)
+      });
+
+      await waitFor(() => expect(fileRequests(fetchFn)).toEqual(['/api/v1/files/5/content']));
+      expect(screen.getByRole('link', { name: 'image-1.png' })).toBeTruthy();
+      expect(screen.queryByRole('img')).toBeNull();
+    });
+
+    it('leaves email images and animated formats as links without fetching them', () => {
+      const fetchFn = routed(() => new Response(pngBytes(), { headers: { 'Content-Type': 'image/png' } }));
+      render(MessageCard, {
+        message: detail({
+          messageType: 'email',
+          attachments: [photo]
+        }),
+        expanded: true,
+        client: createAPIClient(fetchFn)
+      });
+      expect(screen.getByRole('link', { name: 'image-1.png' })).toBeTruthy();
+
+      render(MessageCard, {
+        message: detail({
+          id: 43,
+          messageType: 'google_messages_web',
+          attachments: [{ id: 6, stored: true, filename: 'wave.gif', mimeType: 'image/gif', sizeBytes: 64 }]
+        }),
+        expanded: true,
+        client: createAPIClient(fetchFn)
+      });
+      expect(screen.getByRole('link', { name: 'wave.gif' })).toBeTruthy();
+      expect(screen.queryByRole('img')).toBeNull();
+      expect(fileRequests(fetchFn)).toEqual([]);
+    });
+  });
+
   it('collapses again from the expanded header', async () => {
     const onToggle = vi.fn();
     render(MessageCard, {

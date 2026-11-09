@@ -1,13 +1,11 @@
 <script lang="ts" module>
-  export const MAX_THUMBNAIL_BYTES = 5 * 1024 * 1024;
+  export { MAX_THUMBNAIL_BYTES } from './load-thumbnail';
 </script>
 
 <script lang="ts">
-  import { getFileContent as generatedGetFileContent } from '../../api/generated/api/api';
   import type { APIClient } from '../../api/client';
   import type { PersonFileSearchRow } from '../../explore/models';
-  import { isSupportedThumbnailMIME, readBoundedStream, validatedThumbnailBlob } from './preview-bytes';
-  import { withThumbnailSlot } from './thumbnail-queue';
+  import { loadThumbnailURL, thumbnailAllowed } from './load-thumbnail';
 
   interface Props {
     client: APIClient;
@@ -49,7 +47,7 @@
       thumbnailState = 'video';
       return;
     }
-    if (family !== 'image' || !available || !isSupportedThumbnailMIME(mimeType) || size > MAX_THUMBNAIL_BYTES) {
+    if (family !== 'image' || !available || !thumbnailAllowed(mimeType, size)) {
       thumbnailState = 'unavailable';
       return;
     }
@@ -61,7 +59,7 @@
     thumbnailState = 'loading';
     const controller = new AbortController();
     let current = true;
-    void withThumbnailSlot(controller.signal, () => loadImage(id, mimeType, controller.signal))
+    void loadThumbnailURL(client, id, mimeType, controller.signal)
       .then((url) => {
         if (!current || controller.signal.aborted) {
           URL.revokeObjectURL(url);
@@ -81,16 +79,6 @@
       releaseImage();
     };
   });
-
-  async function loadImage(id: number, mimeType: string, signal: AbortSignal): Promise<string> {
-    const { data, response } = await generatedGetFileContent({ id }, { ...client, signal });
-    if (!response.ok || !(data instanceof ReadableStream)) {
-      throw new Error('Archived thumbnail content could not be loaded.');
-    }
-    const bytes = await readBoundedStream(data, response.headers, signal, MAX_THUMBNAIL_BYTES);
-    const blob = validatedThumbnailBlob(bytes, mimeType, response.headers.get('Content-Type'));
-    return URL.createObjectURL(blob);
-  }
 
   function releaseImage(): void {
     if (activeObjectURL) URL.revokeObjectURL(activeObjectURL);

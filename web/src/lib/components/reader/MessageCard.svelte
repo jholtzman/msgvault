@@ -11,7 +11,9 @@
   import type { ArchiveMessageDetail, MessageViewMode } from '../../archive/types';
   import IdentityAvatar from '../common/IdentityAvatar.svelte';
   import ContentFrame from './ContentFrame.svelte';
+  import InlineImage from './InlineImage.svelte';
   import MessageRecordings from './MessageRecordings.svelte';
+  import { thumbnailAllowed } from '../files/load-thumbnail';
 
   interface Props {
     message: ArchiveMessageDetail;
@@ -58,6 +60,9 @@
     typeof message.bodyHtml === 'string' && message.bodyHtml.trim() !== '' && !sanitizationFailed
   );
   const renderAsHTML = $derived(hasRenderableHTML && viewMode === 'html');
+  // Chat messages (texts, Google Voice, Google Messages) show their images in
+  // place; email keeps every attachment as a download link.
+  const inlineImages = $derived(!isEmailMessageType(message.messageType ?? ''));
 
   function formatDate(value: string): string {
     const parsed = new Date(value);
@@ -127,7 +132,9 @@
       <ul class="attachments" aria-label="Attachments">
         {#each message.attachments as attachment (attachment.id)}
           <li>
-            {#if attachment.stored}
+            {#if attachment.stored && client && inlineImages && thumbnailAllowed(attachment.mimeType, attachment.sizeBytes)}
+              <InlineImage {client} {attachment} />
+            {:else if attachment.stored}
               <a href={`/api/v1/files/${attachment.id}/content`} download={attachment.filename}>
                 {attachment.filename || '(unnamed file)'}
               </a>
